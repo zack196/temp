@@ -6,7 +6,7 @@
 /*   By: zel-oirg <zel-oirg@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/01/24 21:18:46 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/14 17:28:35 by mregrag          ###   ########.fr       */
+/*   Updated: 2025/04/24 21:57:01 by mregrag          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -28,6 +28,7 @@ int main(int argc, char **argv)
 		ConfigParser config(configFile);
 		ServerManager server;
 		config.parseFile();
+		/*config.print();*/
 		server.setupServers(config.getServers());
 		server.run();
 

@@ -3,10 +3,10 @@
 /*                                                        :::      ::::::::   */
 /*   LocationConfig.hpp                                 :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
+/*   By: zakaria <zakaria@student.42.fr>            +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/02/04 16:54:43 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/18 22:44:47 by mregrag          ###   ########.fr       */
+/*   Updated: 2025/04/28 18:34:02 by zakaria          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -15,14 +15,14 @@
 
 #include <string>
 #include <vector>
-
+// is_location_have_redirection
 class LocationConfig 
 {
 	public:
 		LocationConfig();
 		~LocationConfig();
 		LocationConfig(const LocationConfig& other);
-		LocationConfig& operator=(const LocationConfig& other);
+		LocationConfig& operator=(const LocationConfig& other); 
 
 		void setRoot(const std::string& root);
 		void setIndex(const std::string& index);
@@ -40,21 +40,28 @@ class LocationConfig
 		const std::string& getCgiExtension() const;
 		const std::string& getCgiPath() const;
 		std::string resolvePath(const std::string& requestPath) const;
+		const std::pair<int, std::string>& getRedirect() const;
 
 		void setPath(const std::string& path);
+		void setRedirect(const std::string& redirectValue);
 		const std::string& getPath() const;
+
+		bool is_location_have_redirection() const;
+
+		const std::string& getRedirectPath() const; 
+
+		int getRedirectCode() const; 
+
 
 		void print() const;
 		std::vector<std::string> split(const std::string& str, char delimiter);
-		// to add :
 
-		bool is_location_have_redirection() { return false; }
-	
 		bool if_location_has_cgi() const {
 			//TODO verify also if the file extention have a _cgiExtension
 			return !_cgiExtension.empty() && !_cgiPath.empty();
 		}
-		private:
+		
+	private:
 		std::string _root;
 		std::string _path;
 		std::string _index;
@@ -62,6 +69,7 @@ class LocationConfig
 		std::vector<std::string> _allowedMethods;
 		std::string _cgiExtension;
 		std::string _cgiPath;
+		std::pair<int, std::string> _redirect;
 };
 
 #endif

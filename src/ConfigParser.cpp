@@ -6,7 +6,7 @@
 /*   By: zel-oirg <zel-oirg@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/02/04 17:29:36 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/18 16:17:33 by mregrag          ###   ########.fr       */
+/*   Updated: 2025/04/20 21:51:51 by mregrag          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -62,7 +62,7 @@ void ConfigParser::removeComments(std::string& content)
 	}
 }
 
-// Utility function to trim leading and trailing whitespace
+// Utility function to Utils::trim leading and trailing whitespace
 void ConfigParser::trimWhitespace(std::string& content) 
 {
 	// Trim leading whitespace
@@ -244,7 +244,7 @@ void ConfigParser::parseServerBlock(const std::string& block)
 		if (endDirective == std::string::npos)
 			break;
 
-		std::string directiveLine = trim(block.substr(pos, endDirective - pos));
+		std::string directiveLine = Utils::trim(block.substr(pos, endDirective - pos));
 		if (directiveLine.empty()) 
 		{
 			pos = endDirective + 1;
@@ -257,8 +257,8 @@ void ConfigParser::parseServerBlock(const std::string& block)
 			pos = endDirective + 1;
 			continue;
 		}
-		std::string key = trim(directiveLine.substr(0, spacePos));
-		std::string value = trim(directiveLine.substr(spacePos + 1));
+		std::string key = Utils::trim(directiveLine.substr(0, spacePos));
+		std::string value = Utils::trim(directiveLine.substr(spacePos + 1));
 
 		if (key == "location")
 		{
@@ -317,7 +317,7 @@ LocationConfig ConfigParser::parseLocationBlock(const std::string& locationHeade
 
 	while (std::getline(iss, line))
 	{
-		line = trim(line);
+		line = Utils::trim(line);
 		if (line.empty() || line == "}")
 			continue;
 
@@ -326,8 +326,8 @@ LocationConfig ConfigParser::parseLocationBlock(const std::string& locationHeade
 		if (pos == std::string::npos)
 			throw std::runtime_error("Invalid config line: " + line);
 
-		std::string key = trim(line.substr(0, pos));
-		std::string value = trim(line.substr(pos + 1));
+		std::string key = Utils::trim(line.substr(0, pos));
+		std::string value = Utils::trim(line.substr(pos + 1));
 
 		// Remove the trailing semicolon or brace if present
 		if (!value.empty() && (value[value.size() - 1] == ';' || value[value.size() - 1] == '{'))
@@ -336,6 +336,8 @@ LocationConfig ConfigParser::parseLocationBlock(const std::string& locationHeade
 		// Assign values based on the key
 		if (key == "root")
 			location.setRoot(value);
+		else if (key == "return") 
+			location.setRedirect(value);
 		else if (key == "index")
 			location.setIndex(value);
 		else if (key == "autoindex")
@@ -358,20 +360,11 @@ std::vector<std::string> ConfigParser::split(const std::string& str, char delimi
 	std::istringstream iss(str);
 	while (std::getline(iss, token, delimiter)) 
 	{
-		token = trim(token);
+		token = Utils::trim(token);
 		if (!token.empty())
 			tokens.push_back(token);
 	}
 	return (tokens);
-}
-
-std::string ConfigParser::trim(const std::string& str) 
-{
-	size_t first = str.find_first_not_of(" \t");
-	size_t last = str.find_last_not_of(" \t");
-	if (first == std::string::npos || last == std::string::npos)
-		return "";
-	return str.substr(first, last - first + 1);
 }
 
 void ConfigParser::print() const 

@@ -14,48 +14,36 @@
 #include "Logger.hpp"
 #include "../include/Client.hpp"
 
-class ServerManager
+class ServerManager 
 {
 	private:
-		EpollManager			_epollManager;
-		std::vector<ServerConfig>	_servers;
-		std::map<int, ServerConfig*>	_server_map;
-		std::map<int, Client*>		_clients;
+		std::vector<ServerConfig> _servers;
+		std::map<int, ServerConfig*> _serverMap;
+		std::map<int, Client*> _clients;
+		EpollManager _epollManager;
+
+		// Constants
+		static const int MAX_EVENTS;
+		static const int CONNECTION_TIMEOUT;
+		static const int TIMEOUT_CHECK_INTERVAL;
+		static const int EPOLL_TIMEOUT;
+
+		// Private methods
+		void cleanup();
+		void handleSingleEvent(struct epoll_event& event);
+		void handleNewConnection(int server_fd);
+		void handleClientEvent(int client_fd, uint32_t events);
+		void setNonBlocking(int fd);
+
 	public:
 		ServerManager();
 		~ServerManager();
 
 		void setupServers(const std::vector<ServerConfig>& servers);
 		void run();
-		void handleEvent(struct epoll_event& event);
-		void acceptConnection(ServerConfig& server);
-		void acceptConnection(ServerConfig& server, int server_fd);
-		void handleRequest(int client_fd);
-		void handleResponse(int client_fd);
 		void closeConnection(int client_fd);
-		void checkTimeouts(int timeout_seconds);
-
-		void buildResponse(Client* client);
-
-		class ErrorServer : public std::exception
-		{
-			private:
-				std::string _message;
-			public:
-				ErrorServer(std::string message) throw()
-				{
-					_message = "SERVER ERROR: " + message;
-				}
-				virtual const char* what() const throw()
-				{
-					return (_message.c_str());
-				}
-				virtual ~ErrorServer() throw() {}
-		};
-
-
+		void checkTimeouts();
 };
-
 
 
 #endif

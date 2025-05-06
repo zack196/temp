@@ -6,7 +6,7 @@
 /*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/10 15:05:56 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/15 23:03:54 by mregrag          ###   ########.fr       */
+/*   Updated: 2025/04/22 17:34:54 by mregrag          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -52,8 +52,11 @@ void EpollManager::removeFd(int fd)
 
 int EpollManager::wait(std::vector<struct epoll_event>& events, int timeout)
 {
+	if (events.empty())
+		return 0;
+
 	int numEvents = epoll_wait(_epollFd, &events[0], events.size(), timeout);
 	if (numEvents == -1)
 		throw std::runtime_error("Epoll wait failed");
-	return (numEvents);
+	return numEvents;
 }

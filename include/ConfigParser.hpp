@@ -6,7 +6,7 @@
 /*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/02/04 17:16:39 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/12 20:24:12 by mregrag          ###   ########.fr       */
+/*   Updated: 2025/04/20 22:49:05 by mregrag          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -27,7 +27,7 @@ class ConfigParser
 	public:
 		// Constructors and Destructor
 		ConfigParser();
-		explicit ConfigParser(const std::string& configFilePath);
+		ConfigParser(const std::string& configFilePath);
 		ConfigParser(const ConfigParser& other);
 		ConfigParser& operator=(const ConfigParser& other);
 		~ConfigParser();
@@ -48,7 +48,6 @@ class ConfigParser
 		std::pair<std::string, std::string> parseLine(const std::string& line);
 
 		std::vector<std::string> split(const std::string& str, char delimiter);
-		std::string trim(const std::string& str);
 
 		// Utility functions as member functions
 		void parseServerBlocks(const std::string& content);
