@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Services | Webserv 1337</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>
+    <div class="container">
+      <a href="index.html" class="nav-logo">WEBSERV<span>1337</span></a>
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="services.html">Services</a></li>
+        <li><a href="login.html">Login</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main>
+    <div class="container">
+      <section class="section">
+        <h2>HTTP Methods</h2>
+        <p>Our server supports the following HTTP methods according to RFC standards</p>
+        
+        <div class="card-grid">
+          <div class="method get">
+            <div class="method-name">GET</div>
+            <p>Request data from the server without modifying resources</p>
+          </div>
+          
+          <div class="method post">
+            <div class="method-name">POST</div>
+            <p>Submit data to be processed and stored on the server</p>
+          </div>
+          
+          <div class="method delete">
+            <div class="method-name">DELETE</div>
+            <p>Remove specified resources from the server</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>GET Request Demo</h2>
+        
+        <div class="form">
+          <form action="/data" method="GET">
+            <div class="form-group">
+              <label for="getID">Enter ID to retrieve</label>
+              <input type="text" id="getID" name="id" placeholder="e.g. 42">
+            </div>
+            <button type="submit" class="btn">Send GET Request</button>
+          </form>
+        </div>
+        
+        <div class="code">curl "http://localhost:8080/data?id=42"</div>
+      </section>
+
+      <section class="section">
+        <h2>POST Request Demo</h2>
+        
+        <div class="form">
+          <form action="/cgi-bin/upload.py" method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="file">Select a file to upload</label>
+              <input type="file" id="file" name="file">
+            </div>
+            <button type="submit" class="btn">Upload File</button>
+          </form>
+        </div>
+        <div class="form">
+          <form action="/cgi-bin/upload.py" method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="file">Select a file to upload</label>
+              <input type="file" id="file" name="file">
+            </div>
+            <button type="submit" class="btn">Upload File</button>
+          </form>
+        </div>
+        
+        <div class="code">curl -X POST -F "file=@example.txt" http://localhost:8080/upload</div>
+      </section>
+
+      <section class="section">
+        <h2>DELETE Request Demo</h2>
+        
+        <div class="form">
+          <form action="/" method="POST">
+            <div class="form-group">
+              <label for="deleteID">Enter file path to delete</label>
+              <input type="text" id="deleteID" name="path" placeholder="uploads/file.txt">
+            </div>
+            <button type="submit" formmethod="DELETE" class="btn btn-danger">Delete Resource</button>
+          </form>
+        </div>
+        
+        <div class="code">curl -X DELETE http://localhost:8080/uploads/file.txt</div>
+      </section>
+
+      <section class="section">
+        <h2>CGI Scripts</h2>
+        
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 2rem 0;">
+          <a href="/cgi-bin/index.py" class="btn btn-outline">index.cgi</a>
+          <a href="/cgi-bin/hello.cgi" class="btn btn-outline">hello.cgi</a>
+          <a href="/cgi-bin/date.cgi" class="btn btn-outline">date.cgi</a>
+          <a href="/cgi-bin/env.cgi" class="btn btn-outline">env.cgi</a>
+        </div>
+        
+        <div class="code">curl http://localhost:8080/cgi-bin/hello.cgi</div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="copyright">
+      <p>© 2025 Webserv 1337 Project | Created by 42 Network students</p>
+    </div>
+  </footer>
+</body>
+</html>

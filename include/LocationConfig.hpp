@@ -1,75 +1,64 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   LocationConfig.hpp                                 :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: zakaria <zakaria@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/02/04 16:54:43 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/28 18:34:02 by zakaria          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
-#ifndef LOCATIONCONFIG_HPP
-#define LOCATIONCONFIG_HPP
+#ifndef LOCATION_CONFIG_HPP
+#define LOCATION_CONFIG_HPP
 
 #include <string>
 #include <vector>
-// is_location_have_redirection
+#include <utility> // For std::pair
+#include <stdexcept>
+
 class LocationConfig 
 {
-	public:
-		LocationConfig();
-		~LocationConfig();
-		LocationConfig(const LocationConfig& other);
-		LocationConfig& operator=(const LocationConfig& other); 
+private:
+	std::string _root;                      // Root directory for this location
+	std::string _path;                      // URL path for this location
+	std::string _index;                     // Default index file
+	bool _autoindex;                        // Directory listing enabled/disabled
+	std::vector<std::string> _allowedMethods; // Allowed HTTP methods
+	std::string _cgiExtension;              // File extension for CGI scripts
+	std::string _cgiPath;                   // Path to CGI interpreter
+	std::pair<int, std::string> _redirect;  // Redirection code and URL
+	std::string _uploadPath;                // Path for file uploads
 
-		void setRoot(const std::string& root);
-		void setIndex(const std::string& index);
-		void setAutoindex(const std::string& autoindex);
-		void setAllowedMethods(const std::string& methods);
-		void setCgiExtension(const std::string& extension);
-		void setCgiPath(const std::string& path);
-		bool isMethodAllowed(const std::string& method) const;
-		bool isAutoIndexOn() const;
+	std::vector<std::string> split(const std::string& str, char delimiter);
 
-		const std::string& getRoot() const;
-		const std::string& getIndex() const;
-		bool getAutoindex() const;
-		const std::vector<std::string>& getAllowedMethods() const;
-		const std::string& getCgiExtension() const;
-		const std::string& getCgiPath() const;
-		std::string resolvePath(const std::string& requestPath) const;
-		const std::pair<int, std::string>& getRedirect() const;
+public:
+	LocationConfig();
+	LocationConfig(const LocationConfig& other);
+	~LocationConfig();
+	LocationConfig& operator=(const LocationConfig& other);
 
-		void setPath(const std::string& path);
-		void setRedirect(const std::string& redirectValue);
-		const std::string& getPath() const;
+	void setRoot(const std::string& root);
+	void setPath(const std::string& path);
+	void setIndex(const std::string& index);
+	void setAutoindex(const std::string& autoindex);
+	void setAllowedMethods(const std::string& methods);
+	void setCgiExtension(const std::string& extension);
+	void setCgiPath(const std::string& path);
+	void setRedirect(const std::string& redirectValue);
+	void setUploadPath(const std::string& path);
 
-		bool is_location_have_redirection() const;
+	const std::string& getRoot() const;
+	const std::string& getPath() const;
+	const std::string& getIndex() const;
+	bool getAutoindex() const;
+	const std::vector<std::string>& getAllowedMethods() const;
+	const std::string& getCgiExtension() const;
+	const std::string& getCgiPath() const;
+	const std::pair<int, std::string>& getRedirect() const;
+	int getRedirectCode() const;
+	const std::string& getRedirectPath() const;
+	const std::string& getUploadPath() const;
+	bool isAutoIndexOn() const;
 
-		const std::string& getRedirectPath() const; 
+	bool isMethodAllowed(const std::string& method) const;
 
-		int getRedirectCode() const; 
+	bool hasRedirection() const;
 
+	bool hasCgi() const;
 
-		void print() const;
-		std::vector<std::string> split(const std::string& str, char delimiter);
+	bool allowsUploads() const;
 
-		bool if_location_has_cgi() const {
-			//TODO verify also if the file extention have a _cgiExtension
-			return !_cgiExtension.empty() && !_cgiPath.empty();
-		}
-		
-	private:
-		std::string _root;
-		std::string _path;
-		std::string _index;
-		bool _autoindex;
-		std::vector<std::string> _allowedMethods;
-		std::string _cgiExtension;
-		std::string _cgiPath;
-		std::pair<int, std::string> _redirect;
+	std::string getResource(const std::string& requestPath) const;
 };
 
-#endif
+#endif // LOCATION_CONFIG_HPP

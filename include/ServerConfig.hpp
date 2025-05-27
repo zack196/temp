@@ -1,95 +1,77 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   ServerConfig.hpp                                   :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: zel-oirg <zel-oirg@student.42.fr>          +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/01/24 21:24:19 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/25 01:31:44 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
+#ifndef SERVER_CONFIG_HPP
+#define SERVER_CONFIG_HPP
 
-#ifndef SERVERCONFIG_HPP
-#define SERVERCONFIG_HPP
-
-#include "LocationConfig.hpp"
 #include <string>
-#include <map>
 #include <vector>
-# include <sys/socket.h>
-# include <netinet/in.h>
-# include <sys/select.h>
-# include <arpa/inet.h>
-#include <unistd.h>
-#include <stdexcept>
-#include <iostream>
-#include <sstream>
-#include <netdb.h>     // For getaddrinfo
-#include <arpa/inet.h> // For inet_ntoa
-#include <cstring>
-#include "../include/Utils.hpp"
+#include <map>
+#include "LocationConfig.hpp"
+#include <arpa/inet.h>
+#include <netdb.h>
+#include "../include/EpollManager.hpp"
+#include "SessionManager.hpp"
 
-class ServerConfig
+/**
+ * ServerConfig class - Handles server configuration and socket management
+ */
+#define CLIENT_TIMEOUT 3
+#define MAX_CLIENTS 1024
+#define MAX_EVENTS 1024
+#define BUFFER_SIZE 1024 * 1024
+
+class ServerConfig 
 {
-	private:
-		std::string _host;
-		std::vector<uint16_t> _ports;
-		std::string _serverName;
-		size_t _clientMaxBodySize;
-		std::map<int, std::string> _errorPages;
-		std::map<std::string, LocationConfig>   _locations;
-		std::vector<struct sockaddr_in> _server_addresses;
-		std::vector<int> _server_fds;
-		int     				_server_fd;
-		//utils methode
-		bool isValidHost(const std::string& host);
+private:
+	std::string _host;                                // Server host address
+	std::vector<uint16_t> _ports;                     // Server ports
+	std::string _serverName;                          // Server name
+	size_t _clientMaxBodySize;                        // Maximum client body size
+	std::string _clientBodyTmpPath;                   // Temporary path for client body
+	std::map<int, std::string> _errorPages;           // Custom error pages by status code
+	std::map<std::string, LocationConfig> _locations; // Location configurations
 
-	public:
-		ServerConfig();
-		~ServerConfig();
-		ServerConfig(const ServerConfig& other);
-		ServerConfig& operator=(const ServerConfig& other);
+	std::vector<int> _server_fds;                     // Server socket file descriptors
+	std::vector<struct sockaddr_in> _server_addresses;// Server socket addresses
+	EpollManager* _epollManager;
+	SessionManager* _sessions;
 
-		void setHost(const std::string& host);
-		void setPort(const std::string& port);
-		void setServerName(const std::string& name);
-		void setClientMaxBodySize(size_t size);
-		void setErrorPage(int code, const std::string& path);
-		void addLocation(const std::string& path, const LocationConfig& location);
-		void setFd(int fd);
+	int createSocket(uint16_t port);
 
-		uint16_t getPort() const;
-		int getFd(size_t index) const;
-		const std::vector<int>& getFds() const;
-		size_t getClientMaxBodySize() const;
-		const std::string& getServerName() const;
-		const std::string& getHost() const;
-		const std::map<int, std::string>& getErrorPages() const;
-		const std::vector<uint16_t>& getPorts() const;
-		const std::map<std::string, LocationConfig>& getLocations() const;
+	bool isValidHost(const std::string& host);
 
-		void print() const;
-		void setupServer();
+public:
+	ServerConfig();
+	ServerConfig(const ServerConfig& rhs);
+	~ServerConfig();
+	ServerConfig& operator=(const ServerConfig& rhs);
 
-		class ErrorServer : public std::exception
-		{
-			private:
-				std::string _message;
-			public:
-				ErrorServer(std::string message) throw()
-				{
-					_message = "SERVER ERROR: " + message;
-				}
-				virtual const char* what() const throw()
-				{
-					return (_message.c_str());
-				}
-				virtual ~ErrorServer() throw() {}
-		};
+	void setHost(const std::string& host);
+	void setPort(const std::string& portStr);
+	void setServerName(const std::string& name);
+	void setClientMaxBodySize(const std::string& size);
+	void setClientBodyTmpPath(const std::string& path);
+	void setErrorPage(const std::string& value);
+	void addLocation(const std::string& path, const LocationConfig& location);
+	const LocationConfig* findLocation(const std::string& path) const;
 
+	const std::string& getHost() const;
+	uint16_t getPort() const;
+	const std::vector<uint16_t>& getPorts() const;
+	const std::string& getServerName() const;
+	size_t getClientMaxBodySize() const;
+	std::string getClientBodyTmpPath() const;
+	const std::map<int, std::string>& getErrorPages() const;
+	std::string getErrorPage(int statusCode) const;
+	int getFd(size_t index) const;
+	const std::vector<int>& getFds() const;
+	const std::map<std::string, LocationConfig>& getLocations() const;
 
+	void setEpollManager(EpollManager* manager) { _epollManager = manager; }
+	EpollManager* getEpollManager() const { return _epollManager; }
 
+	void setupServer();
+	void cleanupServer();
+	void setSessionManager(SessionManager* s);
+    SessionManager* getSessionManager() const;
 };
 
-#endif
+#endif // SERVER_CONFIG_HPP

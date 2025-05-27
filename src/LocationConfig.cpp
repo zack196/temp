@@ -1,22 +1,11 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   LocationConfig.cpp                                 :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: zakaria <zakaria@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/02/04 17:26:11 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/28 18:34:23 by zakaria          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "../include/LocationConfig.hpp"
 #include "../include/Utils.hpp"
-#include <iostream>
 #include <sstream>
+#include <iostream>
 
-LocationConfig::LocationConfig() : _root(""), _path(""), _index(""), _autoindex(false), _cgiExtension(""), _cgiPath("")
+LocationConfig::LocationConfig() : _root("./www/html"), _path("/"), _index("index.html"), _autoindex(false), _cgiExtension(""), _cgiPath(""), _uploadPath("")
 {
+	_redirect = std::make_pair(0, "");
 }
 
 LocationConfig::~LocationConfig()
@@ -40,13 +29,19 @@ LocationConfig& LocationConfig::operator=(const LocationConfig& other)
 		_cgiExtension = other._cgiExtension;
 		_cgiPath = other._cgiPath;
 		_redirect = other._redirect;
+		_uploadPath = other._uploadPath;
 	}
 	return *this;
 }
 
 void LocationConfig::setRoot(const std::string& root)
 {
-	_root = root; 
+	_root = root;
+}
+
+void LocationConfig::setPath(const std::string& path)
+{
+	_path = path;
 }
 
 void LocationConfig::setIndex(const std::string& index)
@@ -56,46 +51,71 @@ void LocationConfig::setIndex(const std::string& index)
 
 void LocationConfig::setAutoindex(const std::string& autoindex) 
 {
-	if (autoindex == "on" || autoindex== "off")
-		this->_autoindex = (autoindex == "on");
-	else
-		throw std::runtime_error("Wrong autoindex");
+	if (autoindex == "on") 
+		_autoindex = true;
+	else if (autoindex == "off") 
+		_autoindex = false;
+	else 
+		throw std::runtime_error("Invalid autoindex value: " + autoindex + " (must be 'on' or 'off')");
 }
 
-bool LocationConfig::isAutoIndexOn() const 
+void LocationConfig::setUploadPath(const std::string& path)
 {
-	return (_autoindex);
+	_uploadPath = path;
 }
-
 
 std::vector<std::string> LocationConfig::split(const std::string& str, char delimiter) 
 {
 	std::vector<std::string> tokens;
 	std::string token;
 	std::istringstream iss(str);
+
 	while (std::getline(iss, token, delimiter)) 
 	{
 		token = Utils::trim(token);
 		if (!token.empty()) 
 			tokens.push_back(token);
 	}
+
 	return tokens;
 }
 
-std::string LocationConfig::resolvePath(const std::string& requestPath) const 
+std::string LocationConfig::getResource(const std::string& requestPath) const 
 {
-	size_t prefixPos = requestPath.find(_path);
-	if (prefixPos == 0)
+	std::string root = _root;
+	std::string path = requestPath;
+
+	if (!root.empty() && root[root.length() - 1] != '/') 
+		root += '/';
+
+	if (!path.empty() && path[0] == '/') 
+		path = path.substr(1);
+
+	std::string full_path = root + path;
+
+	if (Utils::isDirectory(full_path)) 
 	{
-		std::string relativePath = requestPath.substr(_path.length());
-		return _root + relativePath;
+		std::string index_path = full_path;
+		if (!index_path.empty() && index_path[index_path.length() - 1] != '/') 
+			index_path += '/';
+
+		index_path += _index;
+		if (Utils::fileExists(index_path)) 
+			return index_path;
+
+		return full_path;
 	}
-	return (_root + requestPath);
+
+	if (Utils::fileExists(full_path)) 
+		return full_path;
+
+	return "";
 }
 
 void LocationConfig::setAllowedMethods(const std::string& methods)
 {
 	std::vector<std::string> methodsList = split(methods, ' ');
+	_allowedMethods.clear();
 
 	for (std::vector<std::string>::iterator it = methodsList.begin(); it != methodsList.end(); ++it)
 	{
@@ -104,7 +124,7 @@ void LocationConfig::setAllowedMethods(const std::string& methods)
 		if (method == "GET" || method == "POST" || method == "DELETE") 
 			_allowedMethods.push_back(method);
 		else 
-			throw std::runtime_error("Invalid HTTP method: " + method);
+			throw std::runtime_error("Invalid HTTP method: " + method + " (allowed: GET, POST, DELETE)");
 	}
 }
 
@@ -118,9 +138,33 @@ void LocationConfig::setCgiPath(const std::string& path)
 	_cgiPath = path;
 }
 
+void LocationConfig::setRedirect(const std::string& redirectValue) 
+{
+	std::istringstream iss(redirectValue);
+	int code;
+	std::string url;
+
+	if (!(iss >> code >> url)) 
+		throw std::runtime_error("Invalid redirect format: " + redirectValue + 
+			   " (should be 'code url')");
+
+	if (code < 300 || code > 308) 
+		throw std::runtime_error("Invalid redirect code: " + Utils::toString(code) + " (must be between 300-308)");
+
+	if (!url.empty() && url[url.length()-1] == ';') 
+		url.erase(url.length()-1);
+
+	_redirect = std::make_pair(code, url);
+}
+
 const std::string& LocationConfig::getRoot() const 
 {
 	return _root;
+}
+
+const std::string& LocationConfig::getPath() const 
+{
+	return _path;
 }
 
 const std::string& LocationConfig::getIndex() const
@@ -133,25 +177,14 @@ bool LocationConfig::getAutoindex() const
 	return _autoindex;
 }
 
-void LocationConfig::setPath(const std::string& path)
+bool LocationConfig::isAutoIndexOn() const 
 {
-	_path = path;
+	return _autoindex;
 }
 
-void LocationConfig::setRedirect(const std::string& redirectValue) 
+const std::vector<std::string>& LocationConfig::getAllowedMethods() const
 {
-	std::istringstream iss(redirectValue);
-	if (!(iss >> _redirect.first >> _redirect.second)) 
-		throw std::runtime_error("Invalid redirect format");
-
-	// Remove trailing semicolon if present (C++98 compatible way)
-	if (!_redirect.second.empty()) 
-	{
-		size_t len = _redirect.second.length();
-		if (_redirect.second[len-1] == ';') 
-			_redirect.second.erase(len-1);
-	}
-
+	return _allowedMethods;
 }
 
 const std::pair<int, std::string>& LocationConfig::getRedirect() const 
@@ -159,40 +192,14 @@ const std::pair<int, std::string>& LocationConfig::getRedirect() const
 	return _redirect;
 }
 
-const std::string& LocationConfig::getPath() const 
+int LocationConfig::getRedirectCode() const 
 {
-	return _path;
-}
-const std::vector<std::string>& LocationConfig::getAllowedMethods() const
-{
-	return _allowedMethods;
-}
-
-bool LocationConfig::isMethodAllowed(const std::string& method) const
-{
-	if (_allowedMethods.empty())
-		return true;
-
-	for (std::vector<std::string>::const_iterator it = _allowedMethods.begin(); it != _allowedMethods.end(); ++it) 
-		if (*it == method)
-			return (true);
-	return (false);
-}
-
-
-bool LocationConfig::is_location_have_redirection() const 
-{
-	return !_redirect.second.empty();
+	return _redirect.first;
 }
 
 const std::string& LocationConfig::getRedirectPath() const 
 {
 	return _redirect.second;
-}
-
-int LocationConfig::getRedirectCode() const 
-{
-	return _redirect.first;
 }
 
 const std::string& LocationConfig::getCgiExtension() const
@@ -205,19 +212,35 @@ const std::string& LocationConfig::getCgiPath() const
 	return _cgiPath;
 }
 
-void LocationConfig::print() const
+const std::string& LocationConfig::getUploadPath() const
 {
-	std::cout << "    Location Config:\n";
-	std::cout << "    Root: " << _root << "\n";
-	std::cout << "    Path: " << _path << "\n";
-	std::cout << "    Index: " << _index << "\n";
-	std::cout << "    return: " << _redirect.first <<  " :  " <<  _redirect.second << "\n";
-	std::cout << "    Autoindex: " << (_autoindex ? "on" : "off") << "\n";
-	std::cout << "    Allowed Methods: ";
-	for (size_t i = 0; i < _allowedMethods.size(); ++i)
-		std::cout << _allowedMethods[i] << " ";
-	std::cout << "\n";
-	std::cout << "    CGI Extension: " << _cgiExtension << "\n";
-	std::cout << "    CGI Path: " << _cgiPath << "\n";
+	return _uploadPath;
 }
 
+bool LocationConfig::isMethodAllowed(const std::string& method) const
+{
+	if (_allowedMethods.empty())
+		return true;
+
+	for (std::vector<std::string>::const_iterator it = _allowedMethods.begin(); 
+		it != _allowedMethods.end(); ++it) 
+		if (*it == method)
+			return true;
+
+	return false;
+}
+
+bool LocationConfig::hasRedirection() const 
+{
+	return (_redirect.first >= 300 && _redirect.first <= 308 && !_redirect.second.empty());
+}
+
+bool LocationConfig::hasCgi() const 
+{
+	return (!_cgiExtension.empty() && !_cgiPath.empty());
+}
+
+bool LocationConfig::allowsUploads() const
+{
+	return !_uploadPath.empty();
+}

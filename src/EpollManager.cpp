@@ -1,62 +1,84 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   EpollManager.cpp                                   :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/10 15:05:56 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/22 17:34:54 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
+#include "../include/EpollManager.hpp"
+#include <stdexcept>
+#include <cstring>
+#include <errno.h>
+#include <unistd.h>
 
-#include "../include/webserver.hpp"
-
-EpollManager::EpollManager()
+EpollManager::EpollManager(size_t maxEvents) : _epollFd(-1) , _events(maxEvents)
 {
 	_epollFd = epoll_create(1);
 	if (_epollFd == -1)
-		throw std::runtime_error("Failed to create epoll instance");
+		throw std::runtime_error(std::string("Failed to create epoll: ") + strerror(errno));
 }
 
-EpollManager::~EpollManager() 
+EpollManager::~EpollManager()
 {
-	close(_epollFd);
+	if (_epollFd != -1)
+	{
+		close(_epollFd);
+		_epollFd = -1;
+	}
 }
 
-void EpollManager::addFd(int fd, uint32_t events)
+bool EpollManager::add(int fd, uint32_t events)
 {
-	struct epoll_event event;
-	memset(&event, 0, sizeof(event));
-	event.data.fd = fd;
-	event.events = events;
-	if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, fd, &event) == -1)
-		throw std::runtime_error("Failed to add FD to epoll");
+	if (_epollFd == -1 || fd < 0)
+		return false;
+
+	epoll_event ev = {};
+	ev.events = events;
+	ev.data.fd = fd;
+
+	return (epoll_ctl(_epollFd, EPOLL_CTL_ADD, fd, &ev) != -1);
 }
 
-void EpollManager::modifyFd(int fd, uint32_t events)
+bool EpollManager::modify(int fd, uint32_t events)
 {
-	struct epoll_event event;
-	memset(&event, 0, sizeof(event));
-	event.data.fd = fd;
-	event.events = events;
-	if (epoll_ctl(_epollFd, EPOLL_CTL_MOD, fd, &event) == -1)
-		throw std::runtime_error("Failed to modify FD in epoll");
+	if (_epollFd == -1 || fd < 0)
+		return false;
+
+	epoll_event ev = {};
+	ev.events = events;
+	ev.data.fd = fd;
+
+	return (epoll_ctl(_epollFd, EPOLL_CTL_MOD, fd, &ev) != -1);
 }
 
-void EpollManager::removeFd(int fd)
+bool EpollManager::remove(int fd)
 {
+	if (_epollFd == -1 || fd < 0)
+		return false;
+
 	if (epoll_ctl(_epollFd, EPOLL_CTL_DEL, fd, NULL) == -1)
-		throw std::runtime_error("Failed to remove FD from epoll");
+		if (errno != EBADF && errno != ENOENT)
+			return false;
+
+	return true;
 }
 
-int EpollManager::wait(std::vector<struct epoll_event>& events, int timeout)
+int EpollManager::getFd() const
 {
-	if (events.empty())
-		return 0;
+	return _epollFd;
+}
 
-	int numEvents = epoll_wait(_epollFd, &events[0], events.size(), timeout);
-	if (numEvents == -1)
-		throw std::runtime_error("Epoll wait failed");
+
+int EpollManager::wait(int timeout)
+{
+	if (_epollFd == -1)
+		return -1;
+
+	int numEvents = epoll_wait(_epollFd, _events.data(), _events.size(), timeout);
+
+	if (numEvents == -1 && errno != EINTR)
+		throw std::runtime_error(std::string("epoll_wait failed: ") + 
+			   strerror(errno));
+
 	return numEvents;
+}
+
+const epoll_event& EpollManager::getEvent(size_t index) const
+{
+	if (index >= _events.size())
+		throw std::out_of_range("EpollManager: Event index out of range");
+	return _events[index];
 }

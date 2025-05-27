@@ -1,25 +1,28 @@
 #ifndef EPOLLMANAGER_HPP
 #define EPOLLMANAGER_HPP
 
-#include <vector>
 #include <sys/epoll.h>
-#include <stdexcept>
-#include <unistd.h>
-#include <cstring>
+#include <vector>
 
 class EpollManager 
 {
-	public:
-		EpollManager();
-		~EpollManager();
+public:
+	EpollManager(size_t maxEvents);
+	~EpollManager();
 
-		void addFd(int fd, uint32_t events);   // Register a socket for monitoring
-		void modifyFd(int fd, uint32_t events); // Change monitored events
-		void removeFd(int fd);                 // Stop monitoring an FD
-		int wait(std::vector<struct epoll_event>& events, int timeout); // Wait for events
+	EpollManager(const EpollManager&);
+	EpollManager& operator=(const EpollManager&);
 
-	private:
-		int _epollFd; // File descriptor for the epoll instance
+	bool add(int fd, uint32_t events);
+	bool modify(int fd, uint32_t events);
+	bool remove(int fd);
+	int wait(int timeout = -1);
+	const epoll_event& getEvent(size_t index) const;
+	int getFd() const;
+
+private:
+	int _epollFd;
+	std::vector<epoll_event> _events;
 };
 
 #endif

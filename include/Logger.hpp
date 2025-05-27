@@ -1,15 +1,3 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Logger.hpp                                         :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/09 21:51:56 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/09 21:52:50 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #ifndef LOGGER_HPP
 #define LOGGER_HPP
 
@@ -23,7 +11,7 @@
 
 #define LOG_DEBUG(msg)   Logger::getInstance().debug(msg)
 #define LOG_INFO(msg)    Logger::getInstance().info(msg)
-#define LOG_WARNING(msg) Logger::getInstance().warning(msg)
+#define LOG_WARN(msg) Logger::getInstance().warning(msg)
 #define LOG_ERROR(msg)   Logger::getInstance().error(msg)
 #define LOG_FATAL(msg)   Logger::getInstance().fatal(msg)
 

@@ -1,18 +1,11 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Utils.cpp                                          :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/18 17:17:40 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/22 00:43:17 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "../include/Utils.hpp"
+#include <fstream>
+#include <unistd.h>
+#include <ctype.h>
+#include <cstring>
 
-std::string Utils::getMimeType(const std::string &path) 
+
+std::string Utils::getMimeType(const std::string &path) // TODO 
 {
 	size_t dot_pos = path.find_last_of(".");
 	if (dot_pos == std::string::npos)
@@ -44,9 +37,40 @@ std::string Utils::getMimeType(const std::string &path)
 	return "application/octet-stream";
 }
 
+// Example of RFC 1123 date format: "Tue, 13 May 2025 23:58:00 GMT"
+std::string Utils::getCurrentDate()
+{
+	char buffer[128];
+	time_t now = time(NULL);
+	struct tm* gmt = gmtime(&now);
+	strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S GMT", gmt);
+	return std::string(buffer);
+}
+
+std::string Utils::getCurrentDate(size_t delta_t)
+{
+	char buffer[128];
+	time_t now = time(NULL);
+	time_t future = now + delta_t;
+	struct tm* gmt = gmtime(&future);
+	strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S GMT", gmt);
+	return std::string(buffer);
+}
+
 bool Utils::isPathWithinRoot(const std::string& root, const std::string& path) 
 {
 	return path.find(root) == 0;
+}
+
+std::string Utils::readFileContent(const std::string& filePath) 
+{
+	std::ifstream file(filePath.c_str(), std::ios::binary);
+	if (!file.is_open()) 
+		throw std::runtime_error("Could not open file: " + filePath);
+
+	std::stringstream buffer;
+	buffer << file.rdbuf();
+	return buffer.str();
 }
 
 bool Utils::isDirectory(const std::string& path)
@@ -145,26 +169,32 @@ std::string Utils::listDirectory(const std::string& dirPath, const std::string& 
 	return body.str();
 }
 
-int Utils::urlDecode(std::string& str) 
+int Utils::urlDecode(std::string& uri) 
 {
 	std::string result;
-	for (size_t i = 0; i < str.size(); i++) 
+	result.reserve(uri.length());
+
+	for (size_t i = 0; i < uri.length(); ++i)
 	{
-		if (str[i] == '%') 
+		if (uri[i] == '%')
 		{
-			if (i + 2 >= str.size() || !isxdigit(str[i+1]) || !isxdigit(str[i+2])) 
+			if (i + 2 >= uri.length())
 				return -1;
-			std::string hex = str.substr(i+1, 2);
-			char decoded = static_cast<char>(strtol(hex.c_str(), NULL, 16));
-			result += decoded;
+
+			int value;
+			std::istringstream iss(uri.substr(i + 1, 2));
+			if (!(iss >> std::hex >> value))
+				return -1;
+
+			result += static_cast<char>(value);
 			i += 2;
-		} 
-		else if (str[i] == '+') 
+		}
+		else if (uri[i] == '+')
 			result += ' ';
-		else 
-			result += str[i];
+		else
+			result += uri[i];
 	}
-	str = result;
+	uri = result;
 	return 0;
 }
 
@@ -248,7 +278,6 @@ std::string Utils::getMessage(int code)
 		case 431: return "Request Header Fields Too Large";
 		case 451: return "Unavailable For Legal Reasons";
 
-			  // Server Errors
 		case 500: return "Internal Server Error";
 		case 501: return "Not Implemented";
 		case 502: return "Bad Gateway";
@@ -265,6 +294,24 @@ std::string Utils::getMessage(int code)
 	}
 }
 
+std::vector<std::string> Utils::listDirectory(const std::string& path)
+{
+	std::vector<std::string> entries;
+	DIR* dir = opendir(path.c_str());
+	if (!dir)
+		return entries;
+
+	struct dirent* entry;
+	while ((entry = readdir(dir)) != NULL)
+	{
+		if (std::string(entry->d_name) == ".")
+			continue;
+		entries.push_back(std::string(entry->d_name));
+	}
+	closedir(dir);
+	return entries;
+}
+
 size_t Utils::stringToSizeT(const std::string& str) 
 {
 	std::istringstream iss(str);
@@ -278,4 +325,220 @@ size_t Utils::stringToSizeT(const std::string& str)
 	if (iss >> remaining) 
 		throw std::invalid_argument("Extra characters after number: " + str);
 	return (result);
+}
+bool Utils::isValidMethodChar(char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '!' || c == '#' || c == '$' || c == '%' || c == '&' ||
+           c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+           c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+}
+
+bool Utils::isValidMethodToken(const std::string& method)
+{
+    if (method.empty())
+        return false;
+
+    // RFC 7230 defines tokens as consisting of visible ASCII characters
+    // except for delimiters (like spaces, tabs, etc.)
+    for (size_t i = 0; i < method.length(); i++) {
+        char c = method[i];
+
+        // Check for invalid ASCII characters (control characters or non-printable characters)
+        if (c <= 32 || c >= 127 || 
+            c == '(' || c == ')' || c == '<' || c == '>' || 
+            c == '@' || c == ',' || c == ';' || c == ':' || 
+            c == '\\' || c == '"' || c == '/' || c == '[' || 
+            c == ']' || c == '?' || c == '=' || c == '{' || 
+            c == '}' || c == ' ' || c == '\t')
+            return false;
+
+        // Check if the character is a lowercase letter (invalid for HTTP method)
+        if (c >= 'a' && c <= 'z') {
+            return false;  // Reject lowercase letters
+        }
+    }
+
+    return true;
+}
+
+bool Utils::isValidVersion(const std::string& version)
+{
+	// Basic length check
+	if (version.length() != 8)  // "HTTP/1.1" is exactly 8 chars
+		return false;
+
+	// Check prefix and format
+	return (version.substr(0, 5) == "HTTP/" && 
+	isdigit(version[5]) && 
+	version[6] == '.' && 
+	isdigit(version[7]));
+}
+
+
+size_t Utils::skipLeadingWhitespace(const std::string& str)
+{
+	size_t pos = 0;
+	while (pos < str.size() && (str[pos] == ' ' || str[pos] == '\t')) 
+		++pos;
+	return pos;
+}
+
+bool Utils::isValidUri(const std::string& uri)
+{
+    for (size_t i = 0; i < uri.size(); ++i) 
+        if (!std::isprint(static_cast<unsigned char>(uri[i]))) 
+            return false;
+    return true;
+}
+
+bool Utils::isSupportedMethod(const std::string& method)
+{
+	return (method == "GET" || method == "POST" || method == "DELETE");
+}
+
+// Validate HTTP header key as a token per RFC 7230 (tchar characters)
+bool Utils::isValidHeaderKey(const std::string& key) 
+{
+	if (key.empty()) 
+		return false;
+
+	for (size_t i = 0; i < key.size(); ++i) 
+	{
+		char c = key[i];
+		if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			  (c >= '0' && c <= '9') || c == '!' || c == '#' ||
+			  c == '$' || c == '%' || c == '&' || c == '\'' ||
+			  c == '*' || c == '+' || c == '-' || c == '.' ||
+			  c == '^' || c == '_' || c == '`' || c == '|' ||
+			  c == '~')) 
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+
+// Validate HTTP header value per RFC 7230 (field-value)
+bool Utils::isValidHeaderValue(const std::string& value) 
+{
+	// Empty values are allowed in some cases (e.g., Host: )
+	if (value.empty()) 
+		return true;
+
+	// Check each character against field-vchar (VCHAR) and SP/HTAB
+	for (size_t i = 0; i < value.size(); ++i) 
+		if (value[i] != ' ' && value[i] != '\t' && (value[i] < 33 || value[i] > 126)) 
+			return false;
+	return true;
+}
+
+std::string Utils::extractAttribute(const std::string& headers, const std::string& key) {
+    std::string search = key + "=\"";
+    size_t start = headers.find(search);
+    if (start == std::string::npos) return "";
+    start += search.length();
+    size_t end = headers.find("\"", start);
+    if (end == std::string::npos) return "";
+    return headers.substr(start, end - start);
+}
+
+std::string Utils::getFileExtension(const std::string& path)
+{
+	size_t dotPos = path.find_last_of('.');
+	if (dotPos != std::string::npos) 
+		return path.substr(dotPos);
+	return "";
+}
+
+
+bool Utils::isExecutable(const std::string& path)
+{
+	return access(path.c_str(), X_OK) == 0;
+}
+
+
+char** Utils::mapToEnvp(const std::map<std::string, std::string>& env)
+{
+	std::vector<std::string> envStrings;
+
+	for (std::map<std::string, std::string>::const_iterator it = env.begin(); it != env.end(); ++it) 
+		envStrings.push_back(it->first + "=" + it->second);
+
+	char** result = new char*[envStrings.size() + 1];
+
+	for (size_t i = 0; i < envStrings.size(); ++i) 
+	{
+		result[i] = new char[envStrings[i].size() + 1];
+		strcpy(result[i], envStrings[i].c_str());
+	}
+
+	result[envStrings.size()] = NULL;
+	return result;
+}
+
+
+std::string Utils::createTempFile(const std::string& prefix, const std::string& dir)
+{
+	struct stat st;
+	if (stat(dir.c_str(), &st) == -1)
+	{
+		if (errno == ENOENT)
+		{
+			if (mkdir(dir.c_str(), 0755) == -1)
+				throw std::runtime_error("Failed to create directory: " + dir + " error: " + std::string(strerror(errno)));
+		}
+		else
+			throw std::runtime_error("Failed to check directory: " + dir + " error: " + std::string(strerror(errno)));
+	}
+
+	std::stringstream ss;
+	ss << dir << "/" << prefix << "_" << getpid() << "_" << time(NULL);
+	std::string tempFile = ss.str();
+
+	return tempFile;
+}
+
+Utils::CookieAttr::CookieAttr() : maxAge(-1), secure(false), httpOnly(false) {}
+
+std::string Utils::buildCookieAttributes(const CookieAttr &a)
+{
+	std::ostringstream	oss;
+	if (!a.path.empty())
+		oss << "; Path=" << a.path;
+	if (!a.domain.empty())
+		oss << "; Domain=" << a.domain;
+	if (a.maxAge >= 0)
+		oss << "; Max-Age=" << a.maxAge;
+	if (!a.expires.empty())
+		oss << "; Expires=" << a.expires;
+	if (a.secure)
+		oss << "; Secure";
+	if (a.httpOnly)
+		oss << "; HttpOnly";
+	if (!a.sameSite.empty())
+		oss << "; SameSite=" << a.sameSite;
+	return oss.str();
+}
+#include <iostream>
+std::map<std::string, std::string> Utils::parseUrlEncoded(const std::string &body)
+{
+    std::map<std::string, std::string>	out;
+	size_t	p = 0;
+	while (p < body.size())
+	{
+		size_t	eq = body.find('=', p);
+		size_t	percent = body.find('&', p);
+		if (eq == std::string::npos)
+			break ;
+		std::string	key = body.substr(p, eq - p);
+		std::string	val = body.substr(eq + 1, (percent == std::string::npos) 
+			? percent : percent - eq - 1);
+		urlDecode(key);
+		urlDecode(val);
+		out[key] = val;
+		p = (percent == std::string::npos) ? body.size() : percent + 1;
+	}
+	return out;
 }

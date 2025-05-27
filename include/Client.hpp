@@ -1,61 +1,78 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Client.hpp                                         :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/10 16:06:48 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/23 18:38:23 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #ifndef CLIENT_HPP
 #define CLIENT_HPP
 
-#include <netinet/in.h>
+#include <string>
 #include <ctime>
+#include <netinet/in.h>
+#include <sys/types.h>
 #include "ServerConfig.hpp"
+#include "HTTPRequest.hpp"
+#include <cstring>
+#include "HTTPResponse.hpp"
 
-# include <string>
-class HTTPResponse;
-class HTTPRequest;
 
-class Client {
-	private:
-		int _fd;
-		ServerConfig* _server;
-		size_t _bytesSent;
-		time_t _lastActivity;
-		std::string _readBuffer;
-		std::string _writeBuffer;
-		HTTPRequest* _request;
-		HTTPResponse* _response;
-
-	public:
-		// Orthodox Canonical Form
-		Client(int fd_client, ServerConfig* server);
-		Client(const Client& other);
-		~Client();
-		Client& operator=(const Client& other);
-
-		// Getters
-		int getFd() const;
-		void reset(); 
-		time_t getLastActivity() const;
-		ServerConfig* getServer() const;
-		const std::string& getWriteBuffer() const;
-		std::string& getWriteBuffer();
-		const std::string& getReadBuffer() const;
-		size_t& getBytesSent();
-		HTTPRequest* getRequest();
-		HTTPResponse* getResponse();
-
-		// Methods
-		void updateActivity();
-		void handleRequest(void);
-		void handleResponse();
-		void clearBuffers();
+enum ClientState 
+{
+	CLIENT_READING,
+	CLIENT_WRITING,
+	CLIENT_ERROR
 };
 
-#endif 
+class HTTPRequest;
+class HTTPResponse;
+class CGIHandler;
+class Client
+{
+private:
+    int _fd;                            // File descriptor for the client connection
+    ServerConfig* _server;              // Associated server configuration
+    HTTPRequest _request;               // HTTP request object
+    HTTPResponse _response;             // HTTP response object
+    CGIHandler* _cgiHandler;            // CGI handler object
+    bool _isCgi;                        // Indicates whether this client is handling a CGI request
+    size_t _bytesSent;                  // Bytes sent to the client
+    size_t _headersSize;                // Size of the headers sent to the client
+    time_t _lastActivity;               // Last activity timestamptime_t
+    time_t _cgiStartTime;
+    std::string _readBuffer;            // Buffer for reading data from the client
+    std::ifstream _fileStream;          // File stream for serving file responses
+
+public:
+    Client(int fd, ServerConfig* server);
+    ~Client();
+
+    std::string& getReadBuffer();
+    void setReadBuffer(const char* data, ssize_t bytesSet);
+
+    void setClientAddress(const struct sockaddr_in& addr);
+
+    ssize_t getResponseChunk(char* buffer, size_t bufferSize);
+    ssize_t getHeaderResponse(char* buffer);
+    ssize_t getStringBodyResponse(char* buffer);
+    ssize_t getFileBodyResponse(char* buffer, size_t bufferSize);
+
+    int getFd() const;
+    time_t getLastActivity() const;
+    void updateActivity();
+
+    ClientState getState() const;
+
+    HTTPRequest* getRequest();
+    HTTPResponse* getResponse();
+    ServerConfig* getServer() const;
+
+    bool shouldKeepAlive() const;
+    bool hasTimedOut(time_t currentTime, time_t timeout) const;
+
+    void setCgiStartTime(time_t t) { _cgiStartTime = t; }
+    time_t getCgiStartTime() const { return _cgiStartTime; }
+    void reset();
+
+    // CGI-specific methods
+    void setCgiHandler(CGIHandler* cgiHandler);
+    CGIHandler* getCgiHandler() const;
+    void setIsCgi(bool isCgi);
+    bool isCgi() const;
+};
+
+#endif // CLIENT_HPP

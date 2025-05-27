@@ -1,43 +1,56 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   main.cpp                                           :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: zel-oirg <zel-oirg@student.42.fr>          +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/01/24 21:18:46 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/24 21:57:01 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "../include/ConfigParser.hpp"
-#include "../include/webserver.hpp"
+#include "../include/ServerManager.hpp"
+#include "../include/Logger.hpp"
+#include <signal.h>
 
+ServerManager* globalServer = NULL;
 
-int main(int argc, char **argv)
+void signal_handler(int signum) 
 {
-	if (argc != 1 && argc != 2)
+	if (globalServer) 
 	{
-		std::cout << "Usage: " << argv[0] << " [config_file]\n";
-		return (1);
+		LOG_INFO("Signal " + Utils::toString(signum) + " received. Stopping server gracefully...");
+		globalServer->stop();
 	}
-	try
-	{
-		std::string configFile = (argc == 1) ? "config/default.conf" : argv[1];
-
-		ConfigParser config(configFile);
-		ServerManager server;
-		config.parseFile();
-		/*config.print();*/
-		server.setupServers(config.getServers());
-		server.run();
-
-	}
-	catch (const std::exception& e)
-	{
-		std::cerr << "Error: " << e.what() << "\n";
-		return (1);
-	}
-	return (0);
 }
 
+
+int main(int argc, char* argv[])
+{
+	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
+	try 
+	{
+		std::string configFile = "./config/default.conf";
+		if (argc > 1)
+			configFile = argv[1];
+
+		ConfigParser parser(configFile);
+		parser.parseFile();
+
+		std::vector<ServerConfig> servers = parser.getServers();
+		if (servers.empty()) 
+		{
+			LOG_ERROR("No valid server configurations found");
+			return 1;
+		}
+
+		ServerManager serverManager(servers);
+		globalServer = &serverManager;
+
+		if (!serverManager.init()) 
+		{
+			LOG_ERROR("Failed to initialize server");
+			return 1;
+		}
+
+		serverManager.run();
+		return 0;
+		
+	} 
+	catch (const std::exception& e) 
+	{
+		LOG_ERROR("Fatal error: " + std::string(e.what()));
+		return 1;
+	}
+}

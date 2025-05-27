@@ -1,165 +1,202 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Client.cpp                                         :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/10 17:36:21 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/24 03:36:50 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "../include/Client.hpp"
 #include "../include/Logger.hpp"
 #include "../include/HTTPRequest.hpp"
-#include "../include/HTTPResponse.hpp"
-#include "../include/Utils.hpp"
-#include "../include/webserver.hpp"
+#include "../include/CGIHandler.hpp"
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/socket.h>
 
 
-// Client.cpp
-Client::Client(int fd_client, ServerConfig* server) : _fd(fd_client),_server(server),_bytesSent(0),_request(new HTTPRequest(this)),_response(new HTTPResponse(this))
+Client::Client(int fd, ServerConfig* server)
+	: _fd(fd),
+	_server(server),
+	_request(this->getServer()),
+	_response(this->getRequest()),
+	_cgiHandler(NULL),
+	_isCgi(false),
+	_bytesSent(0),
+	_headersSize(0),
+	_lastActivity(time(NULL)),
+	_cgiStartTime(0),
+	_readBuffer("")
 {
-    _lastActivity = time(NULL);
-}
-
-Client::Client(const Client& other): _fd(other._fd),_server(other._server),_bytesSent(other._bytesSent),_lastActivity(other._lastActivity),_readBuffer(other._readBuffer),_writeBuffer(other._writeBuffer),_request(new HTTPRequest(*(other._request))),_response(new HTTPResponse(*(other._response)))
-{
+	if (fd < 0 || !server)
+		throw std::runtime_error("Invalid client parameters");
 }
 
 Client::~Client()
 {
-    delete _request;
-    delete _response;
-}
-
-Client& Client::operator=(const Client& other)
-{
-    if (this != &other)
-    {
-        delete _request;
-        delete _response;
-        
-        _fd = other._fd;
-        _server = other._server;
-        _bytesSent = other._bytesSent;
-        _lastActivity = other._lastActivity;
-        _readBuffer = other._readBuffer;
-        _writeBuffer = other._writeBuffer;
-        
-        _request = new HTTPRequest(*(other._request));
-        _response = new HTTPResponse(*(other._response));
-    }
-    return *this;
-}
-
-void	Client::handleRequest(void)
-{
-	LOG_DEBUG("[handleRequest] Handling request from client " + Utils::toString(this->_fd));
-	
-	char	buffer[BUFFER_SIZE + 1];
-	int		bytesRead = 0;
-
-	memset(buffer, 0, BUFFER_SIZE + 1);
-	bytesRead  = recv(this->_fd, buffer, BUFFER_SIZE, 0);
-	if (bytesRead > 0)
-		buffer[bytesRead] = '\0';
-	else if (bytesRead < 0)
-		throw std::runtime_error("Error with recv function");
-	else if (bytesRead == 0)
-		throw std::runtime_error("Close connection");
-	
-	if (this->_request->getState() == HTTPRequest::FINISH)
-		return (LOG_DEBUG("[handleRequest] Request already finished"));
-
-	std::string str(buffer, bytesRead);
-	this->_request->parse(str);
-}
-
-
-void Client::handleResponse()
-{
-	if (this->_response->buildResponse() == -1) // Reponse not ready
-		return ;
-
-	int bytesSent = -1;
-	if (this->getFd() != -1)
-		bytesSent = send(this->getFd(), this->_response->getResponse().c_str(), this->_response->getResponse().size(), 0);
-	
-	if (bytesSent < 0)
-		throw std::runtime_error("Error with send function");
-	else
-		LOG_DEBUG("Sent " + Utils::toString(bytesSent) + " bytes to client " + Utils::toString(this->getFd()));
-
-	if (this->getResponse()->getState() == HTTPResponse::FINISH)
+	if (_cgiHandler)
 	{
-		if (this->_request->getState() != HTTPRequest::FINISH)
-			throw std::runtime_error("Client Close connection");
-		LOG_DEBUG("Response sent to client "  + Utils::toString( this->getFd()));
+		_isCgi = false;
+		_cgiHandler->cleanup(); // ensure the child process is terminated
+		delete _cgiHandler;
+		_cgiHandler = NULL;
 	}
+
+	if (_fileStream.is_open())
+		_fileStream.close();
+
+	if (_fd >= 0)
+		close(_fd);
+
+	LOG_DEBUG("Client destroyed, fd: " + Utils::toString(_fd));
 }
 
+std::string& Client::getReadBuffer()
+{
+	return _readBuffer;
+}
+
+void Client::setReadBuffer(const char* data, ssize_t bytesSet)
+{
+	_readBuffer.append(data, bytesSet);
+}
+
+ssize_t Client::getResponseChunk(char* buffer, size_t bufferSize)
+{
+	if (!buffer)
+		return -1;
+
+	const size_t totalResponseSize = _response.getHeader().size() + _response.getContentLength();
+
+	if (_bytesSent >= totalResponseSize)
+		return 0;
+
+	else if (_bytesSent < _response.getHeader().size())
+		return getHeaderResponse(buffer);
+
+	else if (!_response.getBody().empty())
+		return getStringBodyResponse(buffer);
+
+	else if (!_response.getFilePath().empty())
+		return getFileBodyResponse(buffer, bufferSize);
+
+	return -1;
+}
+
+ssize_t Client::getHeaderResponse(char* buffer)
+{
+	const std::string& header = _response.getHeader();
+	std::memcpy(buffer, header.c_str(), header.size());
+	_bytesSent += header.size();
+	_headersSize = header.size();
+	return header.size();
+}
+
+ssize_t Client::getStringBodyResponse(char* buffer)
+{
+	const std::string& body = _response.getBody();
+	std::memcpy(buffer, body.c_str(), body.size());
+	_bytesSent += body.size();
+	return body.size();
+}
+
+ssize_t Client::getFileBodyResponse(char* buffer, size_t bufferSize)
+{
+	const std::string& filePath = _response.getFilePath();
+
+	if (!_fileStream.is_open())
+	{
+		_fileStream.open(filePath.c_str(), std::ios::binary);
+		if (!_fileStream.is_open())
+			return -1;
+	}
+	_fileStream.read(buffer, bufferSize);
+	ssize_t bytesRead = _fileStream.gcount();
+
+	if (bytesRead > 0)
+	{
+		_bytesSent += bytesRead;
+		return bytesRead;
+	}
+
+	_fileStream.close();
+	return 0;
+}
 
 int Client::getFd() const
 {
-    return _fd;
+	return _fd;
 }
 
 time_t Client::getLastActivity() const
 {
-    return _lastActivity;
+	return _lastActivity;
 }
 
 void Client::updateActivity()
 {
-    _lastActivity = time(NULL);
+	_lastActivity = time(NULL);
+}
+
+HTTPRequest* Client::getRequest()
+{
+	return &_request;
+}
+
+HTTPResponse* Client::getResponse()
+{
+	return &_response;
 }
 
 ServerConfig* Client::getServer() const
 {
-    return _server;
+	return _server;
 }
 
-const std::string& Client::getWriteBuffer() const
+bool Client::shouldKeepAlive() const
 {
-    return _writeBuffer;
+	return !_response.shouldCloseConnection();
 }
 
-std::string& Client::getWriteBuffer()
+bool Client::hasTimedOut(time_t currentTime, time_t timeout) const
 {
-    return _writeBuffer;
+	if (_isCgi) 
+		return (currentTime - _cgiStartTime) > timeout;
+	else 
+		return (currentTime - _lastActivity) > timeout;
 }
 
-const std::string& Client::getReadBuffer() const
+void Client::reset()
 {
-    return _readBuffer;
+	_request.clear();
+	_response.clear();
+	_readBuffer.clear();
+	_bytesSent = 0;
+	_headersSize = 0;
+
+	if (_fileStream.is_open())
+		_fileStream.close();
+
+	if (_cgiHandler)
+	{
+		_cgiHandler->cleanup();
+		delete _cgiHandler;
+		_cgiHandler = NULL;
+	}
+	_isCgi = false;
+
+	updateActivity();
+	// LOG_DEBUG("Client reset for keep-alive, fd: " + Utils::toString(_fd));
 }
 
-void Client::reset(void)
+void Client::setCgiHandler(CGIHandler* cgiHandler)
 {
-	delete this->_request;
-	this->_request = new HTTPRequest(this);
-	delete this->_response;
-	this->_response = new HTTPResponse(this);
+	_cgiHandler = cgiHandler;
 }
 
+CGIHandler* Client::getCgiHandler() const
+{
+	return _cgiHandler;
+}
 
-size_t& Client::getBytesSent()
+void Client::setIsCgi(bool isCgi)
 {
-    return _bytesSent;
+	_isCgi = isCgi;
 }
-HTTPRequest* Client::getRequest()
+
+bool Client::isCgi() const
 {
-    return _request;
-}
-HTTPResponse* Client::getResponse()
-{
-    return _response;
-}
-void Client::clearBuffers()
-{
-    _readBuffer.clear();
-    _writeBuffer.clear();
-    _bytesSent = 0;
+	return _isCgi;
 }
