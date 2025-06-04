@@ -454,8 +454,11 @@ void HTTPRequest::parseHeadersValue(std::string& rawdata)
 	else 
 		_headers[_headerKey] = _headerValue;
 
+	// cookie:
 	if (_headerKey == "cookie")
-		parseCookieHeader(_headerValue);
+	{
+		_cookies = Utils::parseCookieHeader(_headerValue);
+	}
 
 	_headerKey.erase();
 	_headerValue.erase();
@@ -537,6 +540,27 @@ void HTTPRequest::parseRequestBody(std::string& rawdata)
 			return;
 	}
 
+	/* ----------  NEW: ordinary body -------------------- */
+    if (_state == BODY_INIT && !_isChunked && _multipartBoundary.empty())
+    {
+        // append as much as we still need
+        size_t need = _contentLength - _receivedLength;   // may be 0
+        size_t take = std::min(need, rawdata.size());
+
+        _bodyBuffer.append(rawdata, 0, take);
+        _receivedLength += take;
+        rawdata.erase(0, take);
+
+        if (_receivedLength < _contentLength)
+            return;                       // wait for more TCP segments
+
+        /* body complete */
+        setStatusCode(200);
+        setState(FINISH);
+        return;
+    }
+
+
 	if (_state == BODY_CGI)
 		writeBodyToFile(rawdata);
 
@@ -547,8 +571,6 @@ void HTTPRequest::parseRequestBody(std::string& rawdata)
 		parseChunkBody(rawdata);
 	else 
 	{
-		if (!rawdata.empty())
-			_bodyBuffer = rawdata;
 		setStatusCode(200);
 		setState(FINISH);
 	}
@@ -916,46 +938,14 @@ void HTTPRequest::clear()
 
 }
 
-void HTTPRequest::parseCookieHeader(const std::string &line)
+const std::map<std::string, std::string>&	HTTPRequest::getCookies() const
 {
-	size_t	p = 0;
-	while (p < line.size())
-	{
-		size_t eq = line.find("=", p);
-		size_t end = line.find(";", p);
-		std::string key = Utils::trim(line.substr(p, eq - p));
-		std::string	value = Utils::trim(line.substr(eq 
-				+ 1, (end == std::string::npos ? end : end - eq -1)));
-		_cookies[key] = value;
-		if (key == "sid")
-			_sessionId = value;
-		p = (end == std::string::npos) ? line.size() : end + 1;
-	}
+	return _cookies;
 }
 
-const std::string& HTTPRequest::getCookie(const std::string& name) const
+const std::string&	HTTPRequest::getCookie(const std::string &name) const
 {
-	static std::string empty;
-	std::map<std::string,std::string>::const_iterator it = _cookies.find(name);
+	static const std::string	empty;
+	std::map<std::string, std::string>::const_iterator it = _cookies.find(name);
 	return ( (it == _cookies.end()) ? empty : it->second );
-}
-
-const std::string& HTTPRequest::getSessionId() const 
-{
-	return _sessionId;
-}
-
-const std::string& HTTPRequest::getUsername()  const 
-{
-	return _username;
-}
-
-bool HTTPRequest::isAuthenticated() const 
-{
-	return !_username.empty();
-}
-
-void HTTPRequest::setUsername(const std::string& username)
-{
-	_username = username;	
 }

@@ -10,6 +10,8 @@
 #include <vector>
 #include <sys/stat.h>
 #include <stdexcept>
+#include "Cookie.hpp"
+
 
 // Define the available response states.
 
@@ -80,8 +82,10 @@ public:
 	bool parseHeaders(const std::string& headers);
 	void closeCgiTempFile();
 
-	void addCookie(const std::string& name, const std::string& value, const Utils::CookieAttr& attr = Utils::CookieAttr());
-	void handleLogin();
+	// cookies
+	void addCookie(const Cookie& c);
+	void addSetCookieRaw(const std::string& line); // cgi
+
 private:
 	HTTPRequest* _request; // Directly provided request pointer.
 	// The client can be retrieved via _request->getClient() when needed.
@@ -100,8 +104,9 @@ private:
 	bool _cgiHeaderComplete;
 	bool _hasCgiOutput;
 
-	std::vector<std::string> _setCookies;
-
+	// cookies:
+	std::vector<Cookie> _setCookies;
+	std::vector<std::string> _setCookieLines; // cgi
 };
 
 #endif // HTTPRESPONSE_HPP

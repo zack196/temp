@@ -8,7 +8,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include "../include/EpollManager.hpp"
-#include "SessionManager.hpp"
 
 /**
  * ServerConfig class - Handles server configuration and socket management
@@ -32,7 +31,6 @@ private:
 	std::vector<int> _server_fds;                     // Server socket file descriptors
 	std::vector<struct sockaddr_in> _server_addresses;// Server socket addresses
 	EpollManager* _epollManager;
-	SessionManager* _sessions;
 
 	int createSocket(uint16_t port);
 
@@ -70,8 +68,6 @@ public:
 
 	void setupServer();
 	void cleanupServer();
-	void setSessionManager(SessionManager* s);
-    SessionManager* getSessionManager() const;
 };
 
 #endif // SERVER_CONFIG_HPP

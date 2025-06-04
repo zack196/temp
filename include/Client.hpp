@@ -1,15 +1,15 @@
 #ifndef CLIENT_HPP
 #define CLIENT_HPP
 
+#include "HTTPResponse.hpp"
 #include <string>
 #include <ctime>
 #include <netinet/in.h>
 #include <sys/types.h>
 #include "ServerConfig.hpp"
 #include "HTTPRequest.hpp"
+#include "SessionManager.hpp"
 #include <cstring>
-#include "HTTPResponse.hpp"
-
 
 enum ClientState 
 {
@@ -21,6 +21,7 @@ enum ClientState
 class HTTPRequest;
 class HTTPResponse;
 class CGIHandler;
+
 class Client
 {
 private:
@@ -36,6 +37,7 @@ private:
     time_t _cgiStartTime;
     std::string _readBuffer;            // Buffer for reading data from the client
     std::ifstream _fileStream;          // File stream for serving file responses
+    Session  *_session;
 
 public:
     Client(int fd, ServerConfig* server);
@@ -73,6 +75,10 @@ public:
     CGIHandler* getCgiHandler() const;
     void setIsCgi(bool isCgi);
     bool isCgi() const;
+
+    // session:
+    void setSession(Session* s);
+    Session*    getSession() const;
 };
 
 #endif // CLIENT_HPP

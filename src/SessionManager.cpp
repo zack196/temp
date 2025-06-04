@@ -1,60 +1,90 @@
 #include "../include/SessionManager.hpp"
 
-SessionManager::SessionManager(long ttlSeconds ) : _timeout(ttlSeconds) {}
+SessionManager::SessionManager() : _maxAge(1800) , _idleTimeout(11600) {}
 
-std::string SessionManager::generateSID() 
+SessionManager&	SessionManager::get()
 {
-    std::stringstream ss;
-    for (int i = 0; i < 16; ++i) // 128-bit SID
-        ss << std::hex << std::setw(2) << std::setfill('0') << (rand() % 256);
-    return ss.str();
+	static SessionManager	instance;
+	return instance;
 }
 
-SessionData::SessionData(std::string username, time_t lastSeen)
-    : _username(username), _lastSeen(lastSeen)  {}
-
-std::string SessionManager::createSession(const std::string &username)
+Session&	SessionManager::acquire(HTTPRequest* req, HTTPResponse* res)
 {
-    std::string sid;
-    do
-    {
-        sid = generateSID();
-    } while (_sessions.find(sid) != _sessions.end());
-    _sessions[sid] = SessionData(username, time(NULL));
-    return sid;
+	std::string	sid = req->getCookie("sid");
+    
+	if ( _sessions.find(sid) == _sessions.end())
+	{
+		// generate new cookie and stuff
+		sid = generateSessionID();
+	
+		Session newSession;
+		newSession.created = std::time(NULL);
+		newSession.lastAccess = std::time(NULL);
+	
+		_sessions[sid] = newSession;
+	
+		Cookie  c("sid", sid);
+		c._sameSite = "Lax";
+		c._httpOnly = true;
+		c._path = "/";
+		res->addCookie(c);
+	}
+
+	Session &session = _sessions[sid];
+	session.lastAccess = std::time(NULL);
+	return session;
 }
 
-bool SessionManager::hasSession(const std::string& sid) const
+void SessionManager::reapExpired(const time_t& now)
 {
-    return _sessions.find(sid) != _sessions.end();
-}
-
-SessionData* SessionManager::getSession(const std::string& sid)
-{
-    std::map< std::string, SessionData >::iterator it = _sessions.find(sid);
-    if (it != _sessions.end())
-    {
-        it->second._lastSeen = std::time(NULL);
-        return &it->second;
-    }
-    return NULL;
-}
-
-void SessionManager::removeSession(const std::string& sid)
-{
-    _sessions.erase(sid);
-}
-
-void SessionManager::sweepExpiredSessions()
-{
-    std::map<std::string, SessionData>::iterator it = _sessions.begin();
-    time_t  now = std::time(NULL);
+    std::map<std::string, Session>::iterator it = _sessions.begin();
 
     while (it != _sessions.end())
     {
-        if (now - it->second._lastSeen > _timeout)
-            _sessions.erase(it++);
-        else
-            ++it;
+        // keep a copy of the current element
+        std::map<std::string, Session>::iterator cur = it++;
+
+        if ( static_cast<size_t>(now - cur->second.created)     > _maxAge ||
+             static_cast<size_t>(now - cur->second.lastAccess) > _idleTimeout )
+        {
+            _sessions.erase(cur);   // safe: 'cur' is still valid, 'it' already points to the next element
+        }
     }
+}
+
+
+
+bool	SessionManager::isValidSessionID(const std::string& sid)
+{
+	size_t i = 0;
+	while (i < sid.size())
+	{
+		if ( !std::isalnum(sid[i]) )
+			return false;
+		i++;
+	}
+	return true;
+}
+
+std::string	SessionManager::generateSessionID()
+{
+	std::string sid;
+	for (int i = 0; i < 16; i++)
+		sid += "0123456789abcdef"[std::rand() % 16];
+	for (std::map<std::string, Session>::iterator it = _sessions.begin(); it != _sessions.end(); it++)
+	{
+		if (sid == it->first)
+			generateSessionID();
+	}
+	return sid;
+}
+
+void SessionManager::printSession()
+{
+	std::cout << "---------------all-session-------------------\n";
+
+	for (std::map<std::string, Session>::iterator it = _sessions.begin(); it != _sessions.end(); it++)
+		std::cout << "sid: " << it->first << std::endl;
+	
+	std::cout << "---------------------------------------------\n";
 }

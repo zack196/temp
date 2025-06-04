@@ -47,16 +47,6 @@ std::string Utils::getCurrentDate()
 	return std::string(buffer);
 }
 
-std::string Utils::getCurrentDate(size_t delta_t)
-{
-	char buffer[128];
-	time_t now = time(NULL);
-	time_t future = now + delta_t;
-	struct tm* gmt = gmtime(&future);
-	strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S GMT", gmt);
-	return std::string(buffer);
-}
-
 bool Utils::isPathWithinRoot(const std::string& root, const std::string& path) 
 {
 	return path.find(root) == 0;
@@ -500,45 +490,19 @@ std::string Utils::createTempFile(const std::string& prefix, const std::string& 
 	return tempFile;
 }
 
-Utils::CookieAttr::CookieAttr() : maxAge(-1), secure(false), httpOnly(false) {}
-
-std::string Utils::buildCookieAttributes(const CookieAttr &a)
+// cookies :
+std::map<std::string,std::string> Utils::parseCookieHeader(const std::string& h)
 {
-	std::ostringstream	oss;
-	if (!a.path.empty())
-		oss << "; Path=" << a.path;
-	if (!a.domain.empty())
-		oss << "; Domain=" << a.domain;
-	if (a.maxAge >= 0)
-		oss << "; Max-Age=" << a.maxAge;
-	if (!a.expires.empty())
-		oss << "; Expires=" << a.expires;
-	if (a.secure)
-		oss << "; Secure";
-	if (a.httpOnly)
-		oss << "; HttpOnly";
-	if (!a.sameSite.empty())
-		oss << "; SameSite=" << a.sameSite;
-	return oss.str();
-}
-#include <iostream>
-std::map<std::string, std::string> Utils::parseUrlEncoded(const std::string &body)
-{
-    std::map<std::string, std::string>	out;
-	size_t	p = 0;
-	while (p < body.size())
+    std::map<std::string,std::string> res;
+    std::stringstream ss(h);
+    std::string token;
+    while (std::getline(ss, token, ';'))
 	{
-		size_t	eq = body.find('=', p);
-		size_t	percent = body.find('&', p);
-		if (eq == std::string::npos)
-			break ;
-		std::string	key = body.substr(p, eq - p);
-		std::string	val = body.substr(eq + 1, (percent == std::string::npos) 
-			? percent : percent - eq - 1);
-		urlDecode(key);
-		urlDecode(val);
-		out[key] = val;
-		p = (percent == std::string::npos) ? body.size() : percent + 1;
-	}
-	return out;
+        size_t eq = token.find('=');
+        if (eq==std::string::npos) continue;
+        std::string k = trim(token.substr(0,eq));
+        std::string v = trim(token.substr(eq+1));
+        res[k]=v;
+    }
+    return res;
 }

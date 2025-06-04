@@ -1,7 +1,7 @@
 NAME        = Webserv
 
 CC          = c++
-CFLAGS      = -Wall -Wextra -Werror -std=c++98 #-fsanitize=address -g2
+CFLAGS      = -Wall -Wextra -Werror -std=c++98 -fsanitize=address -g2
 RM          = rm -f
 
 HPP     = $(shell find ./include -name '*.hpp')

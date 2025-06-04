@@ -45,7 +45,6 @@ namespace Utils
 	size_t stringToSizeT(const std::string& str);
 	bool isValidMethodToken(const std::string& method);
 	std::string getCurrentDate();
-	std::string getCurrentDate(size_t delta_t);
 
 	size_t skipLeadingWhitespace(const std::string& str);
 	
@@ -74,18 +73,8 @@ namespace Utils
 	void freeEnvp(char** envp);
 	std::string createTempFile(const std::string& prefix, const std::string& dir);
 
-	// simple helper in Utils.hpp
-	struct CookieAttr
-	{
-		std::string path, domain, sameSite, expires;
-		int         maxAge;      // -1 => omit
-		bool        secure, httpOnly;
-		CookieAttr();
-	};
-	std::string buildCookieAttributes(const CookieAttr& a);
-	
-	std::map<std::string,std::string> parseUrlEncoded(const std::string& body);
-
+	// cookie:
+	std::map<std::string,std::string> parseCookieHeader(const std::string& h);
 
 }
 

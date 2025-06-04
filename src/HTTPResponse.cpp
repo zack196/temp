@@ -63,12 +63,9 @@ HTTPResponse::~HTTPResponse()
 
 void HTTPResponse::clear() 
 {
-	_statusCode    = 200;
 	_protocol      = "HTTP/1.1";
+	_statusCode    = 200;
 	_statusMessage = "OK";
-	
-	_setCookies.clear();
-
 	_headers.clear();
 	_body.clear();
 	_header.clear();
@@ -179,11 +176,13 @@ void HTTPResponse::buildHeader()
 	for (std::map<std::string, std::string>::const_iterator it = _headers.begin(); it != _headers.end(); ++it)
 		oss << it->first << ": " << it->second << "\r\n";
 	
-	for (size_t i = 0; i < _setCookies.size(); i++)
-		oss << "Set-Cookie: " << _setCookies[i] << "\r\n";
+	// cookies:
+	for (std::vector<Cookie>::iterator it = _setCookies.begin(); it != _setCookies.end(); it++ )
+		oss << "Set-Cookie: " << it->toSetCookieString() << "\r\n";
 	
+	for (std::vector<std::string>::iterator it = _setCookieLines.begin(); it != _setCookieLines.end(); it++ )
+		oss << "Set-Cookie: " << *it << "\r\n";
 	
-
 	oss << "\r\n";
 	_header = oss.str();
 }
@@ -191,10 +190,6 @@ void HTTPResponse::buildHeader()
 
 void HTTPResponse::buildResponse() 
 {
-	std::cout << "---------------------------------\n";
-	_request->print();
-	std::cout << "---------------------------------\n";
-	
 	if (_request->getState() == HTTPRequest::ERRORE)
 		buildErrorResponse(_request->getStatusCode());
 	else if (_request->hasCgi())
@@ -253,8 +248,8 @@ void HTTPResponse::buildSuccessResponse(const std::string& fullPath)
 
 void HTTPResponse::handleGet() 
 {
-	
 	std::string resource = _request->getResource();
+	std::cout << "resource = " << resource << std::endl;
 	if (resource.empty()) 
 		return(buildErrorResponse(404));
 
@@ -285,15 +280,8 @@ void  HTTPResponse::handleCgi()
 void HTTPResponse::handlePost() 
 {
 	std::string resource = _request->getResource();
-	if (_request->getPath() == "/login")
-	{
-		std::cout << "in\n";
-		handleLogin();
-		return ;
-	}
 	if (resource.empty() || !Utils::fileExists(resource)) 
 		return(buildErrorResponse(404));
-	
 
 	std::string body = "Resource created successfully\n";
 	setProtocol(_request->getProtocol());
@@ -469,6 +457,13 @@ bool HTTPResponse::parseHeaders(const std::string& headers)
 			value.erase(0, value.find_first_not_of(" \t"));
 			value.erase(value.find_last_not_of(" \t") + 1);
 
+			// handel cgi Set-Cookie
+			if (key == "Set-Cookie")
+			{
+				addSetCookieRaw(value);
+				continue ;
+			}
+
 			setHeader(key, value);
 			LOG_DEBUG("Parsed CGI Header: " + key + ": " + value);
 		}
@@ -520,43 +515,12 @@ void HTTPResponse::closeCgiTempFile()
 	}
 }
 
-void HTTPResponse::addCookie(const std::string &name, const std::string &value, const Utils::CookieAttr &attr)
+void HTTPResponse::addCookie(const Cookie& c)
 {
-	_setCookies.push_back(name + "=" + value + Utils::buildCookieAttributes(attr));
+	_setCookies.push_back(c);
 }
 
-void HTTPResponse::handleLogin()
+void HTTPResponse::addSetCookieRaw(const std::string& line)
 {
-    // (a) Parse x-www-form-urlencoded body -------------------------
-        std::map<std::string,std::string> form =
-            Utils::parseUrlEncoded(_request->getBody());
-
-        std::string user = form["username"];
-        std::string pass = form["password"];
-
-        // (b) Verify credentials (placeholder) -------------------------
-        if (user.empty() || pass != "secret")            // demo check
-        {
-            buildErrorResponse(401);                     // “Unauthorized”
-            return;
-        }
-
-        // (c) Create session & Set-Cookie ------------------------------
-        SessionManager* sm = _request->getServer()->getSessionManager();
-        std::string sid   = sm->createSession(user);
-
-        Utils::CookieAttr attr;      // Path=/  SameSite=Lax by default
-        attr.httpOnly = true;
-        addCookie("sid", sid, attr);
-
-        // (d) Minimal success reply ------------------------------------
-        appendToBody("Logged in as " + user + "\n");
-        setProtocol(_request->getProtocol());
-        setStatusCode(200);
-        setStatusMessage("OK");
-        setHeader("Content-Type", "text/plain");
-        setHeader("Content-Length", Utils::toString(getBody().size()));
-        setHeader("Connection", shouldCloseConnection() ? "close" : "keep-alive");
-        buildHeader();
-        setState(FINISH);
+	_setCookieLines.push_back(line);
 }

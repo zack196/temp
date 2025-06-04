@@ -8,7 +8,7 @@
 #include <fstream>
 #include "Utils.hpp"
 #include "LocationConfig.hpp"
-#include <iostream>
+
 
 
 class ServerConfig;
@@ -73,19 +73,9 @@ public:
 	const LocationConfig* getLocation() const;
 	bool isInternalCGIRequest() const;
 
-	void print()
-	{
-		std::cout << "method= " << _method << std::endl;
-		std::cout << "path= " << _path << std::endl;
-		std::cout << "protocol= " << _protocol << std::endl;
-		for (std::map<std::string, std::string>::iterator it = _headers.begin(); it != _headers.end(); it++)
-			std::cout << it->first << ": " << it->second << std::endl;
-		std::cout << "body: \n";
-		std::cout << _bodyBuffer << std::endl;
-	}
-	void setUsername(const std::string& username);
-	const std::string& getSessionId() const ;
-    const std::string& getUsername()  const ;
+	// cookies:
+	const std::map<std::string, std::string>&	getCookies() const;
+	const std::string&	getCookie(const std::string &name) const;
 
 protected:
 	void parseMethod(std::string& rawdata);
@@ -115,12 +105,6 @@ protected:
 
 	void findLocation(const std::string& path);
 	void closeOpenFiles();
-	
-
-	const std::string& getCookie(const std::string& name) const;
-	void parseCookieHeader(const std::string& line);
-	
-    bool isAuthenticated() const ;
 
 private:
 	HTTPRequest();
@@ -162,9 +146,8 @@ private:
     std::ofstream   _bodyStream; 
     std::string   _bodyTempFile;
 
-	std::map<std::string, std::string> _cookies;
-	std::string	_sessionId;
-	std::string	_username;
+	//cookie:
+	std::map<std::string, std::string>	_cookies;
 
 };
 

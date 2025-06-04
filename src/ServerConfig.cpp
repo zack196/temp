@@ -310,13 +310,3 @@ int ServerConfig::createSocket(uint16_t port)
 
 	return fd;
 }
-
-void ServerConfig::setSessionManager(SessionManager* s)
-{
-	_sessions = s;
-}
-
-SessionManager* ServerConfig::getSessionManager() const
-{
-	return _sessions;
-}

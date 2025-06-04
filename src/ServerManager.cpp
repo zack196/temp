@@ -5,6 +5,7 @@
 #include "../include/Utils.hpp"
 #include "../include/Logger.hpp"
 #include "../include/Client.hpp"
+#include "../include/SessionManager.hpp"
 #include <cstddef>
 #include <iostream>
 #include <string>
@@ -14,7 +15,7 @@
 #include <errno.h>
 
 
-ServerManager::ServerManager(const std::vector<ServerConfig>& servers) : _epollManager(MAX_EVENTS), _running(false), _clientTimeout(CLIENT_TIMEOUT), _maxClients(MAX_CLIENTS), _servers(servers), _sessionManager(1800)
+ServerManager::ServerManager(const std::vector<ServerConfig>& servers) : _epollManager(MAX_EVENTS), _running(false), _clientTimeout(CLIENT_TIMEOUT), _maxClients(MAX_CLIENTS), _servers(servers)
 {
 	LOG_INFO("ServerManager initialized with timeout=" + Utils::toString(_clientTimeout) + "s, maxClients=" + Utils::toString(_maxClients));
 }
@@ -53,8 +54,6 @@ bool ServerManager::init()
 			return false;
 		}
 	}
-	for (size_t i = 0; i < _servers.size(); ++i)
-		_servers[i].setSessionManager(&_sessionManager);
 	return true;
 }
 
@@ -196,20 +195,21 @@ bool ServerManager::receiveFromClient(Client* client)
 		client->updateActivity();
 		client->setReadBuffer(buffer, bytesRead);
 		client->getRequest()->parse(client->getReadBuffer());
-	    // ---- NEW: authenticate if we just parsed complete headers ----
-    	if (client->getRequest()->getState() >= HTTPRequest::HEADER_KEY &&
-    	    !client->getRequest()->getSessionId().empty() &&
-    	    client->getRequest()->getUsername().empty())
-    	{
-    	    SessionManager* sm = client->getServer()->getSessionManager();
-    	    SessionData*    sd = sm->getSession(client->getRequest()->getSessionId());
-    	    if (sd)   
-				client->getRequest()->setUsername( sd->_username );   // friend or make accessor
-    	}
-	
+		
 		if (client->getRequest()->isComplete() && !client->getRequest()->hasCgi())
 		{
-			client->getResponse()->buildResponse();
+			client->setSession(&SessionManager::get().acquire(client->getRequest(), client->getResponse()));
+
+			// print the sid of all session in webserv
+			SessionManager::get().printSession();
+			// login logic
+			
+
+			if (LoginController::handle(client->getRequest(), client->getResponse(), *client->getSession()))
+				client->getResponse()->buildHeader();
+			else
+				client->getResponse()->buildResponse();
+
 			if (!_epollManager.modify(client->getFd(), EPOLLOUT))
 				return false;
 		}
@@ -364,9 +364,9 @@ void ServerManager::checkClientTimeouts()
 
 	if (!timeoutFds.empty())
 		LOG_INFO("Cleaned up " + Utils::toString(timeoutFds.size()) + " client(s) due to " + Utils::toString(_clientTimeout) + "s timeout");
-	
-	// clean the expired session 
-	_sessionManager.sweepExpiredSessions();
+
+	// delete the expired session
+	SessionManager::get().reapExpired(currentTime);
 }
 
 ServerConfig* ServerManager::findServerByFd(int fd)

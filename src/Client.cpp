@@ -200,3 +200,13 @@ bool Client::isCgi() const
 {
 	return _isCgi;
 }
+
+void Client::setSession(Session* s)
+{
+	_session = s;
+}
+
+Session*    Client::getSession() const
+{
+	return _session;
+}

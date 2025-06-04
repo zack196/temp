@@ -7,6 +7,10 @@
 #include "EpollManager.hpp"
 #include "ServerConfig.hpp"
 #include "Client.hpp"
+#include "SessionManager.hpp"
+#include "LoginController.hpp"
+
+class Client ;
 
 class ServerManager 
 {
@@ -76,7 +80,6 @@ private:
 	std::map<int, Client*> _clients;
 
 	std::string _buffer;
-	SessionManager    _sessionManager;
 };
 
 #endif // SERVERMANAGER_HPP
