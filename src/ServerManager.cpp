@@ -45,7 +45,8 @@ bool ServerManager::init()
 				_serverMap[fds[j]] = &_servers[i];
 				if (!_epollManager.add(fds[j], EPOLLIN))
 					return false;
-				LOG_INFO("Server socket " + Utils::toString(fds[j]) + " listening on " + _servers[i].getHost() + ":" + Utils::toString(ports[j]));
+				LOG_INFO("Server socket " + Utils::toString(fds[j]) + " listening on " 
+					+ _servers[i].getHost() + ":" + Utils::toString(ports[j]));
 			}
 		}
 		catch (const std::exception& e)
@@ -188,8 +189,33 @@ bool ServerManager::receiveFromClient(Client* client)
 
 	char buffer[BUFFER_SIZE];
 	std::memset(buffer, 0, BUFFER_SIZE);
-
 	ssize_t bytesRead = recv(client->getFd(), buffer, sizeof(buffer) - 1, 0);
+
+
+	// --------------- handel if the session exist and get /login -----------------
+	Session& sess = *client->getSession();
+	HTTPRequest	*req = client->getRequest();
+	
+	if ( req->getMethod() == "GET"
+	     && req->getPath() == "/login"
+	     && sess.data.count("user") )            // ← already authenticated
+	{
+	    HTTPResponse* res = client->getResponse();
+
+	    res->setProtocol(req->getProtocol());
+	    res->setStatusCode(302);                 // 302 Found
+	    res->setStatusMessage("Found");
+	    res->setHeader("Location", "/");         // where to send him
+	    res->setHeader("Content-Length", "0");
+	    res->setHeader("Connection",
+	                   res->shouldCloseConnection() ? "close" : "keep-alive");
+	    res->buildHeader();                      // no body, header only
+
+	    // flip the socket to EPOLLOUT right here
+	    _epollManager.modify(client->getFd(), EPOLLOUT);
+	    return true;                             // short-circuit normal buildResponse()
+	}
+
 	if (bytesRead > 0)
 	{
 		client->updateActivity();
@@ -203,7 +229,6 @@ bool ServerManager::receiveFromClient(Client* client)
 			// print the sid of all session in webserv
 			SessionManager::get().printSession();
 			// login logic
-			
 
 			if (LoginController::handle(client->getRequest(), client->getResponse(), *client->getSession()))
 				client->getResponse()->buildHeader();
@@ -215,6 +240,7 @@ bool ServerManager::receiveFromClient(Client* client)
 		}
 		return true;
 	}
+
 	if (bytesRead == 0)
 	{
 		LOG_INFO("Client fd " + Utils::toString(client->getFd()) + " closed connection");
@@ -224,7 +250,7 @@ bool ServerManager::receiveFromClient(Client* client)
 	return false;
 }
 
-bool ServerManager::sendToClient(Client* client)
+bool	ServerManager::sendToClient(Client* client)
 {
 	if (!client)
 		return false;
