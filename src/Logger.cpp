@@ -1,35 +1,13 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Logger.cpp                                         :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/09 21:51:45 by mregrag           #+#    #+#             */
-/*   Updated: 2025/04/10 14:34:11 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "../include/Logger.hpp"
+
+Logger::Logger() : _currentLevel(INFO)
+{
+}
 
 Logger& Logger::getInstance() 
 {
     static Logger instance;
     return instance;
-}
-
-Logger::Logger() : _currentLevel(INFO), _colorsEnabled(true)
-{
-}
-
-void Logger::setLogLevel(LogLevel level) 
-{
-    _currentLevel = level;
-}
-
-void Logger::enableColors(bool enable) 
-{
-    _colorsEnabled = enable;
 }
 
 void Logger::debug(const std::string& message) 
@@ -60,28 +38,28 @@ void Logger::fatal(const std::string& message)
 void Logger::log(LogLevel level, const std::string& message)
 {
 
-    std::cerr << (_colorsEnabled ? COLOR_TIME : "") << "[" << getTimestamp() << "] " << (_colorsEnabled ? COLOR_RESET : "");
+    std::cout << COLOR_TIME  << "[" << getTimestamp() << "] " << COLOR_RESET;
     
     switch(level)
     {
         case DEBUG:
-            std::cerr << (_colorsEnabled ? COLOR_DEBUG : "") << "[DEBUG] ";
+            std::cout << COLOR_DEBUG;
             break;
         case INFO:
-            std::cerr << (_colorsEnabled ? COLOR_INFO : "") << "[INFO] ";
+            std::cout << COLOR_INFO;
             break;
         case WARNING:
-            std::cerr << (_colorsEnabled ? COLOR_WARNING : "") << "[WARNING] ";
+            std::cout << COLOR_WARNING;
             break;
         case ERROR:
-            std::cerr << (_colorsEnabled ? COLOR_ERROR : "") << "[ERROR] ";
+            std::cout << COLOR_ERROR;
             break;
         case FATAL:
-            std::cerr << (_colorsEnabled ? COLOR_FATAL : "") << "[FATAL] ";
+            std::cout << COLOR_FATAL;
             break;
     }
     
-    std::cerr << message << (_colorsEnabled ? COLOR_RESET : "") << std::endl;
+    std::cout << message << COLOR_RESET << std::endl;
 }
 
 std::string Logger::getTimestamp() 

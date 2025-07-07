@@ -1,73 +1,71 @@
-#ifndef SERVER_CONFIG_HPP
-#define SERVER_CONFIG_HPP
+#ifndef SERVERCONFIG_HPP
+# define SERVERCONFIG_HPP
 
-#include <string>
-#include <vector>
-#include <map>
-#include "LocationConfig.hpp"
-#include <arpa/inet.h>
-#include <netdb.h>
-#include "../include/EpollManager.hpp"
+# include <string>
+# include <vector>
+# include <map>
+# include <cstdlib>
+# include <cctype>
+# include <netinet/in.h>
+# include <netdb.h>
+# include <arpa/inet.h>
+# include "LocationConfig.hpp"
+# include "Utils.hpp"
 
-/**
- * ServerConfig class - Handles server configuration and socket management
- */
-#define CLIENT_TIMEOUT 3
-#define MAX_CLIENTS 1024
-#define MAX_EVENTS 1024
-#define BUFFER_SIZE 1024 * 1024
+#define TIMEOUT 30
+#define CGI_TIMEOUT 10
+#define CLIENTS 1024
+#define EVENTS 1024
+#define BUFFER_SIZE 1024*1024
 
 class ServerConfig 
 {
 private:
-	std::string _host;                                // Server host address
-	std::vector<uint16_t> _ports;                     // Server ports
-	std::string _serverName;                          // Server name
-	size_t _clientMaxBodySize;                        // Maximum client body size
-	std::string _clientBodyTmpPath;                   // Temporary path for client body
-	std::map<int, std::string> _errorPages;           // Custom error pages by status code
-	std::map<std::string, LocationConfig> _locations; // Location configurations
-
-	std::vector<int> _server_fds;                     // Server socket file descriptors
-	std::vector<struct sockaddr_in> _server_addresses;// Server socket addresses
-	EpollManager* _epollManager;
-
-	int createSocket(uint16_t port);
-
-	bool isValidHost(const std::string& host);
+	std::string _host;
+	std::string _serverName;
+	std::string _root;
+	size_t _clientMaxBodySize;
+	std::string _clientBodyTmpPath;
+	std::map<int, std::string> _errorPages;
+	std::map<std::string, LocationConfig> _locations;
+	std::map<std::string, std::vector<uint16_t> > _host_ports;
+	std::vector<ServerConfig> _servers;
+	bool _isDefault;
 
 public:
 	ServerConfig();
-	ServerConfig(const ServerConfig& rhs);
+	ServerConfig(const std::string& configFilePath);
 	~ServerConfig();
-	ServerConfig& operator=(const ServerConfig& rhs);
 
-	void setHost(const std::string& host);
-	void setPort(const std::string& portStr);
+	void setRoot(const std::string& root);
+	std::string getRoot() const;
+
+	std::vector<ServerConfig> getServers() const;
+
+	void setPorts(const std::vector<uint16_t>& newPorts);
+	std::vector<uint16_t> getPortsByHost(const std::string& host) const;
+	const std::map<std::string, std::vector<uint16_t> >& getHostPort() const;
+
+	void setHostPort(const std::string& hostPort);
+	static bool isValidHost(const std::string& host);
+
 	void setServerName(const std::string& name);
-	void setClientMaxBodySize(const std::string& size);
-	void setClientBodyTmpPath(const std::string& path);
-	void setErrorPage(const std::string& value);
-	void addLocation(const std::string& path, const LocationConfig& location);
-	const LocationConfig* findLocation(const std::string& path) const;
-
-	const std::string& getHost() const;
-	uint16_t getPort() const;
-	const std::vector<uint16_t>& getPorts() const;
 	const std::string& getServerName() const;
+
+	void setClientMaxBodySize(const std::string& size);
 	size_t getClientMaxBodySize() const;
+
+	void setClientBodyTmpPath(const std::string& path);
 	std::string getClientBodyTmpPath() const;
+
+	void setErrorPage(const std::string& value);
 	const std::map<int, std::string>& getErrorPages() const;
 	std::string getErrorPage(int statusCode) const;
-	int getFd(size_t index) const;
-	const std::vector<int>& getFds() const;
+
+	void addLocation(std::string path, LocationConfig location);
 	const std::map<std::string, LocationConfig>& getLocations() const;
-
-	void setEpollManager(EpollManager* manager) { _epollManager = manager; }
-	EpollManager* getEpollManager() const { return _epollManager; }
-
-	void setupServer();
-	void cleanupServer();
+	LocationConfig& getLocation(const std::string& key);
+	const LocationConfig& findLocation(const std::string& path) const;
 };
 
-#endif // SERVER_CONFIG_HPP
+#endif

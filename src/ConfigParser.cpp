@@ -1,336 +1,341 @@
 #include "../include/ConfigParser.hpp"
 #include "../include/Utils.hpp"
+#include "../include/Logger.hpp"
+#include "../include/LocationConfig.hpp"
+#include <cstddef>
+#include <functional>
 #include <sstream>
+#include <string>
+#include <fstream>
 #include <cctype>
+#include <iostream>
+#include <unistd.h>
 
-ConfigParser::ConfigParser() : _configFile(), _servers() 
+ConfigParser::ConfigParser(const std::string& configFilePath) : _configFile(configFilePath) 
 {
-}
-
-ConfigParser::ConfigParser(const std::string& configFilePath) : _configFile(configFilePath), _servers() 
-{
-}
-
-ConfigParser::ConfigParser(const ConfigParser& rhs) : _configFile(rhs._configFile), _servers(rhs._servers)
-{
-}
-
-ConfigParser& ConfigParser::operator=(const ConfigParser& rhs) 
-{
-	if (this != &rhs) 
-	{
-		_configFile = rhs._configFile;
-		_servers = rhs._servers;
-	}
-	return *this;
-}
-
-void ConfigParser::parseFile() 
-{
-	const std::string& path = _configFile.getPath();
-	validateFilePath(path);
-
-	std::string content = _configFile.readFile(path);
-	cleanContent(content);
-	parseServerBlocks(content);
-}
-
-void ConfigParser::removeComments(std::string& content) 
-{
-	size_t pos = 0;
-	while ((pos = content.find('#', pos)) != std::string::npos) 
-	{
-		size_t end = content.find('\n', pos);
-		content.erase(pos, end != std::string::npos ? end - pos : std::string::npos);
-	}
-}
-
-void ConfigParser::trimWhitespace(std::string& content) 
-{
-	// Remove leading whitespace
-	size_t start = content.find_first_not_of(" \t\r\n");
-	if (start != std::string::npos) 
-		content.erase(0, start);
-	else 
-	{
-		content.clear();
-		return;
-	}
-
-	// Remove trailing whitespace
-	size_t end = content.find_last_not_of(" \t\r\n");
-	if (end != std::string::npos) 
-		content.erase(end + 1);
-}
-
-void ConfigParser::collapseSpaces(std::string& content) 
-{
-	std::string result;
-	result.reserve(content.size());  // Optimize for performance
-
-	bool inSpace = false;
-	bool inNewline = false;
-
-	for (size_t i = 0; i < content.size(); ++i) 
-	{
-		if (content[i] == '\n') 
-		{
-			if (!inNewline) 
-			{
-				result += '\n';
-				inNewline = true;
-				inSpace = false;
-			}
-		}
-		else if (std::isspace(content[i])) 
-		{
-			if (!inSpace && !inNewline) 
-			{
-				result += ' ';
-				inSpace = true;
-			}
-		}
-		else 
-		{
-			result += content[i];
-			inSpace = false;
-			inNewline = false;
-		}
-	}
-
-	size_t pos = result.find_last_not_of(" \t\r\n");
-	if (pos != std::string::npos) 
-		result.erase(pos + 1);
-
-	else 
-		result.clear();
-
-	content = result;
-}
-
-void ConfigParser::cleanContent(std::string& content) 
-{
-	removeComments(content);
-	trimWhitespace(content);
-	collapseSpaces(content);
 }
 
 void ConfigParser::validateFilePath(const std::string& path) 
 {
-	int fileType = _configFile.getTypePath(path);
-
-	switch (fileType) 
-	{
-		case 0:
-			throw std::runtime_error("Configuration file does not exist: " + path);
-		case 2:
-			throw std::runtime_error("Path is a directory, not a file: " + path);
-		case 3:
-			throw std::runtime_error("Path is a special file: " + path);
-		case 1:
-			break; // Regular file, no action needed
-		default:
-			throw std::runtime_error("Unknown file type: " + path);
-	}
-
-	if (!_configFile.checkFile(path, 0)) 
-		throw std::runtime_error("No read permission for file: " + path);
+	struct stat fileStat;
+	if (stat(path.c_str(), &fileStat) != 0)
+		throw std::runtime_error("Configuration file does not exist: " + path);
+	if (!S_ISREG(fileStat.st_mode))
+		throw std::runtime_error("Path is not a file: " + path);
+	if (access(path.c_str(), R_OK) != 0)
+		throw std::runtime_error("Cannot read configuration file: " + path);
+	if (fileStat.st_size > 8192)
+		throw std::runtime_error("Configuration file too large (max 8KB): " + path);
 }
 
-void ConfigParser::parseServerBlocks(const std::string& content) 
+std::vector<ServerConfig> ConfigParser::getServers() const 
+{
+	return _servers;
+}
+
+void ConfigParser::validateBraces(const std::string& path) 
+{
+	std::ifstream file(path.c_str());
+	if (!file.is_open())
+		throw std::runtime_error("Cannot open file: " + path);
+
+	std::string line;
+	int braceCount = 0;
+	int lineNumber = 0;
+
+	while (std::getline(file, line)) 
+	{
+		++lineNumber;
+
+		std::size_t commentPos = line.find('#');
+		if (commentPos != std::string::npos)
+			line = line.substr(0, commentPos);
+
+		line = Utils::trimWhitespace(line);
+
+		if (line.empty())
+			continue;
+
+		for (std::size_t i = 0; i < line.length(); ++i) 
+		{
+			if (line[i] == '{')
+				++braceCount;
+			else if (line[i] == '}') 
+			{
+				--braceCount;
+				if (braceCount < 0)
+					throw std::runtime_error("Unexpected '}' at line " + Utils::toString(lineNumber));
+			}
+		}
+
+		if (line != "{" && line != "}" && line.find("server") != 0 && line.find("location") != 0)
+			if (line[line.length() - 1] != ';')
+				throw std::runtime_error("Missing semicolon at line " + Utils::toString(lineNumber) + line);
+	}
+
+	file.close();
+
+	if (braceCount > 0)
+		throw std::runtime_error("Unclosed opening brace(s): " + Utils::toString(braceCount));
+}
+
+void ConfigParser::validateServerConflicts() const
+{
+	std::map<std::string, std::string> hostPortToServerName;
+
+	for (size_t i = 0; i < _servers.size(); ++i)
+	{
+		const std::map<std::string, std::vector<uint16_t> >& hostPorts = _servers[i].getHostPort();
+		const std::string& serverName = _servers[i].getServerName();
+
+		for (std::map<std::string, std::vector<uint16_t> >::const_iterator hostIt = hostPorts.begin(); hostIt != hostPorts.end(); ++hostIt)
+		{
+			const std::string& host = hostIt->first;
+			const std::vector<uint16_t>& ports = hostIt->second;
+			for (size_t j = 0; j < ports.size(); ++j)
+			{
+				std::string hostPort = host + ":" + Utils::toString(ports[j]);
+
+				if (hostPortToServerName.find(hostPort) != hostPortToServerName.end())
+				{
+					const std::string& existingServerName = hostPortToServerName[hostPort];
+					if (existingServerName == serverName)
+						throw std::runtime_error("conflicting server name \"" + serverName + "\" on " + hostPort);
+				}
+				else
+					hostPortToServerName[hostPort] = serverName;
+			}
+		}
+	}
+}
+
+
+void ConfigParser::parseFile() 
+{
+	validateFilePath(_configFile);
+	validateBraces(_configFile);
+
+	std::ifstream file(_configFile.c_str());
+	if (!file.is_open())
+		throw std::runtime_error("Cannot open config file");
+
+	parseServerBlocks(file);
+	if (_servers.empty())
+		throw std::runtime_error("No valid server block found in configuration file");
+
+	validateServerConflicts();
+	file.close();
+	
+}
+
+std::string ConfigParser::extractLocationPath(const std::string& line) 
+{
+	std::size_t pos = line.find("location");
+	if (pos == std::string::npos)
+		return "";
+
+	pos += 8;
+	pos = line.find_first_not_of(" \t", pos);
+	if (pos == std::string::npos)
+		return "";
+
+	std::size_t end = line.find('{', pos);
+	if (end == std::string::npos)
+		end = line.length();
+
+	return Utils::trim(line.substr(pos, end - pos));
+}
+
+
+void ConfigParser::parseServerBlocks(std::ifstream& fileStream) 
 {
 	_servers.clear();
+	std::string line, blockBuffer;
+	int braceDepth = 0;
+	bool serverFound = false;
 
-	size_t pos = 0;
-	while ((pos = content.find("server", pos)) != std::string::npos) 
+	while (std::getline(fileStream, line)) 
 	{
-		size_t blockStart = findBlockStart(content, pos);
-		size_t blockEnd = findBlockEnd(content, blockStart);
+		line = Utils::trimWhitespace(line);
+		if (line.empty() || line[0] == '#') 
+			continue;
 
-		std::string block = content.substr(blockStart + 1, blockEnd - blockStart - 2);
-		parseServerBlock(block);
-		pos = blockEnd;
-	}
-}
-
-size_t ConfigParser::findBlockStart(const std::string& content, size_t pos) 
-{
-	size_t blockStart = content.find("{", pos);
-	if (blockStart == std::string::npos) 
-		throw std::runtime_error("Missing '{' in server block");
-
-	return blockStart;
-}
-
-size_t ConfigParser::findBlockEnd(const std::string& content, size_t blockStart) 
-{
-	int braceCount = 1;
-	size_t blockEnd = blockStart + 1;
-
-	while (braceCount > 0 && blockEnd < content.size()) 
-	{
-		if (content[blockEnd] == '{') 
-			braceCount++;
-
-		else if (content[blockEnd] == '}') 
-			braceCount--;
-
-		blockEnd++;
-	}
-
-	if (braceCount != 0) 
-		throw std::runtime_error("Unmatched '{' in server block");
-
-	return blockEnd;
-}
-
-void ConfigParser::parseServerBlock(const std::string& block) 
-{
-	ServerConfig server;
-	LocationConfig defaultLocation;
-
-	server.addLocation("/", defaultLocation);
-	size_t pos = 0;
-
-	while (pos < block.size()) 
-	{
-		while (pos < block.size() && std::isspace(block[pos])) 
-			++pos;
-
-		if (pos >= block.size()) 
-			break;
-
-		// Find directive end
-		size_t endDirective = block.find_first_of(";\n{", pos);
-		if (endDirective == std::string::npos) 
+		if (braceDepth == 0 && !serverFound && line.find("server") != std::string::npos) 
 		{
-			break;
-		}
+			serverFound = true;
 
-		std::string directiveLine = Utils::trim(block.substr(pos, endDirective - pos));
-		if (directiveLine.empty()) 
-		{
-			pos = endDirective + 1;
+			size_t bracePos = line.find('{');
+			if (bracePos != std::string::npos) 
+				braceDepth = 1;
 			continue;
 		}
 
-		size_t spacePos = directiveLine.find_first_of(" \t");
-		if (spacePos == std::string::npos) 
+		if (serverFound && braceDepth == 0) 
 		{
-			pos = endDirective + 1;
+			size_t bracePos = line.find('{');
+			if (bracePos != std::string::npos) 
+				braceDepth = 1;
 			continue;
 		}
 
-		std::string key = Utils::trim(directiveLine.substr(0, spacePos));
-		std::string value = Utils::trim(directiveLine.substr(spacePos + 1));
-
-		if (key == "location") 
+		if (braceDepth > 0) 
 		{
-			size_t openBrace = block.find('{', endDirective);
-			if (openBrace == std::string::npos) 
-				throw std::runtime_error("Missing '{' in location block");
-
-			int braceCount = 1;
-			size_t closeBrace = openBrace + 1;
-			while (braceCount > 0 && closeBrace < block.size()) 
+			for (size_t i = 0; i < line.length(); ++i) 
 			{
-				if (block[closeBrace] == '{') 
-					braceCount++;
-
-				else if (block[closeBrace] == '}') 
-					braceCount--;
-
-				closeBrace++;
+				if (line[i] == '{') 
+					braceDepth++;
+				else if (line[i] == '}')
+					braceDepth--;
 			}
-
-			if (braceCount != 0) 
-				throw std::runtime_error("Unmatched '{' in location block");
-
-			std::string locationBlock = block.substr(openBrace + 1, closeBrace - openBrace - 2);
-			LocationConfig location = parseLocationBlock(value, locationBlock);
-			server.addLocation(value, location);
-			pos = closeBrace;
-		} 
-		else 
-		{
-			if (key == "host") 
-				server.setHost(value);
-			else if (key == "listen") 
-				server.setPort(value);
-			else if (key == "server_name") 
-				server.setServerName(value);
-			else if (key == "client_max_body_size") 
-				server.setClientMaxBodySize(value);
-			else if (key == "client_body_temp_path") 
-				server.setClientBodyTmpPath(value);
-			else if (key == "error_page") 
-				server.setErrorPage(value);
-
-			pos = endDirective + 1;
+			if (braceDepth == 0) 
+			{
+				parseServerBlock(blockBuffer);
+				blockBuffer.clear();
+				serverFound = false;
+			}
+			else
+			{
+				if (!blockBuffer.empty()) 
+					blockBuffer += '\n';
+				blockBuffer += line;
+			}
 		}
 	}
-
-	_servers.push_back(server);  // Add to vector
+	if (braceDepth > 0)
+		throw std::runtime_error("Unclosed server block");
 }
 
-LocationConfig ConfigParser::parseLocationBlock(const std::string& locationHeader, 
-						const std::string& block) 
+
+void ConfigParser::parseServerBlock(const std::string& block)
 {
-	LocationConfig location;
-	std::istringstream iss(block);
+	std::istringstream stream(block);
+	std::string line;
+	bool inLocation = false;
+	std::string locationPath;
+	std::string locationContent;
+	ServerConfig server;
+	bool has_default_location = false;
+
+	while (std::getline(stream, line))
+	{
+		if (line.find("location") == 0)
+		{
+			locationPath = extractLocationPath(line);
+
+			if (locationPath == "/")
+				has_default_location = true;
+			inLocation = true;
+		}
+		if (inLocation)
+		{
+			locationContent += line;
+			std::size_t openBrace = locationContent.find('{');
+			std::size_t closeBrace = locationContent.find('}');
+
+			if (openBrace != std::string::npos && closeBrace != std::string::npos)
+			{
+				LocationConfig location;
+				std::string locationBlock = locationContent.substr(openBrace + 1, closeBrace - openBrace - 1);
+				location.setPath(locationPath);
+				location.setRoot(server.getRoot());
+				parseLocationBlock(locationBlock, location);
+				server.addLocation(locationPath, location);
+				inLocation = false;
+				locationContent.clear();
+			}
+		}
+		else 
+		parseDirective(line, server);
+	}
+
+	if (inLocation)
+		throw std::runtime_error("Unclosed location block for path: " + locationPath);
+	if (!has_default_location)
+	{
+		LocationConfig defaultLoc;
+		defaultLoc.setPath("/");
+		defaultLoc.setRoot(server.getRoot());
+		server.addLocation("/", defaultLoc);
+	}
+	_servers.push_back(server);
+}
+
+
+void ConfigParser::parseDirective(const std::string& line, ServerConfig& server) 
+{
+
+	std::string directiveLine = line.substr(0, line.find(';'));
+	size_t spacePos = line.find_first_of(" \t");
+
+	if (spacePos == std::string::npos) 
+		throw std::runtime_error("Invalid directive format (expected 'key value;'): " + line);
+
+	std::string key = Utils::trim(directiveLine.substr(0, spacePos));
+	std::string value = Utils::trim(directiveLine.substr(spacePos + 1));
+
+	if (key.empty()) 
+		throw std::runtime_error("Empty directive key: " + line);
+	if (value.empty()) 
+		throw std::runtime_error("Empty directive value for key '" + key + "': " + line);
+
+	if (key == "listen") 
+		server.setHostPort(value);
+	else if (key == "server_name") 
+		server.setServerName(value);
+	else if (key == "root") 
+		server.setRoot(value);
+	else if (key == "client_max_body_size") 
+		server.setClientMaxBodySize(value);
+	else if (key == "client_body_temp_path") 
+		server.setClientBodyTmpPath(value);
+	else if (key == "error_page") 
+		server.setErrorPage(value);
+	else
+		throw std::runtime_error("Unknown server directive '" + key + "': " + line);
+}
+
+void ConfigParser::parseLocationBlock(const std::string& content, LocationConfig& location)
+{
+	std::istringstream stream(content);
 	std::string line;
 
-	location.setPath(locationHeader);
-
-	while (std::getline(iss, line)) 
+	while (std::getline(stream, line, ';'))
 	{
-		line = Utils::trim(line);
-		if (line.empty() || line == "}") 
+		if (line.empty())
 			continue;
 
-		size_t pos = line.find_first_of(" \t");
-		if (pos == std::string::npos) 
-			throw std::runtime_error("Invalid config line in location block: " + line);
+		std::size_t spacePos = line.find_first_of(" \t");
+		if (spacePos == std::string::npos)
+			throw std::runtime_error("Invalid location directive format (expected 'key value'): " + line);
 
-		std::string key = Utils::trim(line.substr(0, pos));
-		std::string value = Utils::trim(line.substr(pos + 1));
+		std::string key = Utils::trim(line.substr(0, spacePos));
+		std::string value = Utils::trim(line.substr(spacePos + 1));
 
-		// Remove trailing semicolon or opening brace
-		if (!value.empty() && (value[value.size() - 1] == ';' || value[value.size() - 1] == '{')) 
-			value = value.substr(0, value.size() - 1);
+		if (key.empty())
+			throw std::runtime_error("Empty location directive key: " + line);
+		if (value.empty())
+			throw std::runtime_error("Empty location directive value for key '" + key + "': " + line);
 
-		if (key == "root") 
+		if (key == "root")
 			location.setRoot(value);
-		else if (key == "return") 
+		else if (key == "return")
 			location.setRedirect(value);
-		else if (key == "index") 
+		else if (key == "index")
 			location.setIndex(value);
-		else if (key == "autoindex") 
+		else if (key == "autoindex")
 			location.setAutoindex(value);
-		else if (key == "allow_methods") 
+		else if (key == "allow_methods")
 			location.setAllowedMethods(value);
-		else if (key == "cgi_extension") 
-			location.setCgiExtension(value);
-		else if (key == "upload_path") 
+		else if (key == "upload_path")
 			location.setUploadPath(value);
-		else if (key == "cgi_path") 
+		else if (key == "cgi_path")
 			location.setCgiPath(value);
+		else
+			throw std::runtime_error("Unknown location directive '" + key + "': " + line);
 	}
-
-	return location;
 }
 
-std::vector<std::string> ConfigParser::split(const std::string& str, char delimiter) 
-{
-	std::vector<std::string> tokens;
-	std::string token;
-	std::istringstream iss(str);
 
-	while (std::getline(iss, token, delimiter)) 
-	{
-		token = Utils::trim(token);
-		if (!token.empty()) 
-			tokens.push_back(token);
-	}
-	return tokens;
-}
+
+
+

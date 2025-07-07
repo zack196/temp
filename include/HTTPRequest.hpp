@@ -1,100 +1,121 @@
 #ifndef HTTPREQUEST_HPP
 #define HTTPREQUEST_HPP
 
-#include <cstddef>
-#include <ostream>
 #include <string>
+#include <vector>
 #include <map>
 #include <fstream>
-#include "Utils.hpp"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include "ServerConfig.hpp"
 #include "LocationConfig.hpp"
 
-
-
-class ServerConfig;
-
-class HTTPRequest {
+class HTTPRequest
+{
 public:
-	enum ParseState {
+	enum ParseState
+	{
 		INIT,
-		LINE_METHOD,
-		LINE_URI,
-		LINE_VERSION,
-		HEADER_KEY,
-		HEADER_VALUE,
+		METHOD,
+		URI,
+		PROTOCOL,
+		HEADER,
 		BODY_INIT,
-		BODY_CHUNKED,
-		BODY_MULTIPART,
-                BODY_CGI,
+		CGI,
+		CHUNKED,
+		MULTIPART,
 		FINISH,
-		ERRORE
+		ERROR
 	};
 
-	enum MultipartState {
+	enum MultipartState
+	{
 		PART_HEADER,
 		PART_DATA,
 		PART_BOUNDARY,
 		PART_END
 	};
 
-	enum ChunkState {
+	enum ChunkState
+	{
 		CHUNK_SIZE,
-		CHUNK_DATA,
-		CHUNK_FINISHED
-	};	HTTPRequest(ServerConfig* server);
-	HTTPRequest(const HTTPRequest& other);
-	HTTPRequest& operator=(const HTTPRequest& other);
+		CHUNK_DATA
+	};
+
+private:
+	ServerConfig                        _server;
+	std::vector<ServerConfig>           _servers;
+	LocationConfig                      _location;
+	int                                 _statusCode;
+	ParseState                          _state;
+	size_t                              _parsePosition;
+	size_t                              _contentLength;
+	std::string                         _method;
+	std::string                         _uri;
+	std::string                         _path;
+	std::string                         _query;
+	std::string                         _protocol;
+	std::string                         _bodyBuffer;
+	std::map<std::string, std::string>  _headers;
+	std::map<std::string, std::string>  _queryParameters;
+	std::string                         _contentType;
+	std::string                         _resource;
+	bool                                _isChunked;
+	bool                                _keepAlive;
+	int                                 _chunkSize;
+	size_t                              _length;
+	std::string                         _boundary;
+	MultipartState                      _multipartState;
+	ChunkState                          _chunkState;
+	std::string                         _bodyFile;
+	std::ofstream                       _body;
+	std::ofstream                       _uploadFile;
+	size_t                              _totalBodySize;
+	int                                 _client_fd;
+
+public:
+	HTTPRequest(std::vector<ServerConfig>& servers);
 	~HTTPRequest();
 
-	bool keepAlive() const;
-	const std::map<std::string, std::string>& getHeaders() const;
+	void parseRequest(std::string& data);
 	bool isComplete() const;
-	bool hasCgi();
-	const std::string& getUri() const;
-	const std::string& getProtocol() const;
-	const std::string& getQuery() const;
-	const std::string& getBody() const;
-	const std::string& getMethod() const;
-	const std::string& getResource() const;
-	const std::string& getPath() const;
-        const std::string& getBodyfile() const;
-	std::string getQueryParameter(const std::string& key) const;
+	bool keepAlive() const;
 	int getState() const;
 	int getStatusCode() const;
-	size_t getContentLength() const;
-	const std::string& getHeader(const std::string& key) const;
-
-	ServerConfig* getServer() const;
-
 	void setStatusCode(int code);
 	void setState(ParseState state);
-	void parse(std::string& rawdata);
+
+	const std::string& getMethod() const;
+	const std::string& getUri() const;
+	const std::string& getPath() const;
+	const std::string& getQuery() const;
+	const std::string& getProtocol() const;
+	const std::string& getBody() const;
+	const std::string& getResource() const;
+	const std::string& getBodyfile() const;
+	const std::map<std::string, std::string>& getHeaders() const;
+	const std::string& getHeader(const std::string& key) const;
+	size_t getContentLength() const;
+	const ServerConfig& getServer() const;
+	const LocationConfig& getLocation() const;
+	std::string getQueryParameter(const std::string& key) const;
+
+	void setClientfd(int fd);
+
+	bool hasCgi();
 	void clear();
-	const LocationConfig* getLocation() const;
-	bool isInternalCGIRequest() const;
+	std::string getSocketIp(int fd);
+	const ServerConfig& findServerByHost(const std::string& value);
 
-	// cookies:
-	const std::map<std::string, std::string>&	getCookies() const;
-	const std::string&	getCookie(const std::string &name) const;
-
-protected:
-	void parseMethod(std::string& rawdata);
-	void parseUri(std::string& rawdata);
-	void parseQueryParameters(const std::string& query);
-	void parseVersion(std::string& rawdata);
-	void parseHeadersKey(std::string& rawdata);
-	void parseHeadersValue(std::string& rawdata);
-	void parseRequestBody(std::string& rawdata);
-
-	void parseChunkBody(std::string& rawdata);
-	bool processChunkSize(std::string& rawdata);
-	bool processChunkData(std::string& rawdata);
-
-	void parseMultipartBody(std::string& rawdata);
-	bool processPartHeader(std::string& rawdata);
-	bool processPartData(std::string& rawdata);
-	bool processPartBoundary(std::string& rawdata);
-        void writeBodyToFile(std::string& rawdata);
+private:
+	void parseMethod(std::string& data);
+	void parseUri(std::string& data);
+	void parseProtocol(std::string& data);
+	void parseHeaders(std::string& data);
+	void parseBody();
+	void parseChunkBody(std::string& data);
+	void parseMultipartBody(std::string& data);
 
 	bool validateHostHeader();
 	bool validateContentLength();
@@ -103,52 +124,14 @@ protected:
 	bool validateAllowedMethods();
 	bool validateCgi();
 
-	void findLocation(const std::string& path);
-	void closeOpenFiles();
+	bool readChunkSize(std::string& data);
+	bool readChunkData(std::string& data);
 
-private:
-	HTTPRequest();
+	bool processPartHeader(std::string& data);
+	bool processPartData(std::string& data);
+	bool processPartBoundary(std::string& data);
 
-	ServerConfig* _server;
-	int           _statusCode;
-	ParseState    _state;
-	size_t        _parsePosition;
-	size_t        _contentLength;
-	std::string   _method;
-	std::string   _uri;
-	std::string   _path;
-	std::string   _query;
-	std::string   _protocol;
-	std::string   _bodyBuffer;
-	std::string   _headerKey;
-	std::string   _headerValue;
-	std::map<std::string, std::string> _headers;
-	std::map<std::string, std::string> _queryParameters;
-	std::string   _contentType;
-	std::string   _boundary;
-	std::string   _resource;
-	bool          _isChunked;
-	bool          _keepAlive;
-        size_t           _chunkSize;
-	size_t        _receivedLength;
-	std::string   _multipartBoundary;
-	const LocationConfig* _location;
-	bool          _uploadHeadersParsed;
-	bool          _chunkFileInitialized;
-	std::string   _uploadFilepath;
-	std::string   _uploadBoundary;
-	MultipartState _multipartState;
-	ChunkState     _chunkState;
-	bool           _hasCgi;
-	std::string    _chunkFilePath;
-	std::ofstream  _uploadFile;
-	std::ofstream  _chunkFile;
-    std::ofstream   _bodyStream; 
-    std::string   _bodyTempFile;
-
-	//cookie:
-	std::map<std::string, std::string>	_cookies;
-
+	void writeBodyToFile(std::string& data);
 };
 
-#endif
+#endif // HTTPREQUEST_HPP

@@ -1,87 +1,67 @@
 #include "../include/CGIHandler.hpp"
 #include "../include/HTTPRequest.hpp"
-#include "../include/HTTPResponse.hpp"
-#include "../include/Client.hpp"
 #include <cstring>
+#include <sys/stat.h>
+#include <wait.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <cstring>
 #include <fcntl.h>
 #include <cerrno>
 #include <fcntl.h>
-#include <iostream>
-#include <sys/wait.h>
-#include <signal.h>
 #include <stdlib.h>
+#include <iostream>
 
-CGIHandler::CGIHandler(HTTPRequest* request, HTTPResponse* response)
-	: _pid(-1)
-	, _request(request)
-	, _response(response)
-	, _envp(NULL)
-	, _argv(NULL)
-	, _startTime(time(NULL))
-	, _timeout(30)
-	, _pipeClosed(false)
+
+CGIHandler::CGIHandler()
+	: _pid(-1),
+	_ouFd(-1),
+	_inFd(-1),
+	_execPath(),
+	_scriptPath(),
+	_outputFile(),
+	_envp(NULL),
+	_argv(NULL),
+	_env(),
+	_startTime(0)
 {
-	if (!request || !response)
-		throw std::runtime_error("Invalid request or response");
+}
 
-	_execPath = _request->getLocation()->getCgiPath();
-	_scriptPath = _request->getResource();
+void CGIHandler::init(HTTPRequest* request)
+{
+	_scriptPath = request->getResource();
+	_extension = Utils::getExtension(_scriptPath);
+	_execPath = request->getLocation().getCgiPath(_extension);
 
 	validatePaths();
 
-	if (pipe(_pipeFd) == -1)
-		throw std::runtime_error("Failed to create pipe: " + std::string(strerror(errno)));
-}
+	_outputFile = Utils::createTempFile("cgi_output_", request->getServer().getClientBodyTmpPath());
 
-CGIHandler::~CGIHandler()
-{
-	cleanup();
-}
+	_ouFd = open(_outputFile.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
+	if (_ouFd == -1)
+		throw std::runtime_error("Failed to create output file: " + _outputFile + " error: " + std::string(strerror(errno)));
 
-void CGIHandler::validatePaths() const
-{
-	struct stat st;
+	_inFd = open(request->getBodyfile().c_str(), O_RDONLY);
+	if (_inFd == -1)
+		throw std::runtime_error("Failed to open request body file: " + std::string(strerror(errno)));
 
-	if (_execPath.empty() || _scriptPath.empty())
-		throw std::runtime_error("Empty CGI paths");
-
-	if (stat(_execPath.c_str(), &st) == -1)
-		throw std::runtime_error("Cannot access interpreter: " + _execPath);
-
-	if (!(st.st_mode & S_IXUSR))
-		throw std::runtime_error("Interpreter not executable: " + _execPath);
-
-	if (stat(_scriptPath.c_str(), &st) == -1)
-		throw std::runtime_error("Cannot access script: " + _scriptPath);
-
-	if (!(st.st_mode & S_IRUSR))
-		throw std::runtime_error("Script not readable: " + _scriptPath);
-}
-
-void CGIHandler::setEnv()
-{
-	cleanEnv();
-	_env.clear();
 
 	_env["GATEWAY_INTERFACE"] = "CGI/1.1";
 	_env["SERVER_SOFTWARE"] = "Webserv/1.0";
-	_env["REQUEST_METHOD"] = _request->getMethod();
+	_env["REQUEST_METHOD"] = request->getMethod();
 	_env["SCRIPT_NAME"] = _scriptPath;
 	_env["SCRIPT_FILENAME"] = _scriptPath;
-	_env["PATH_INFO"] = _request->getPath();
+	_env["PATH_INFO"] = request->getPath();
 	_env["PATH_TRANSLATED"] = _scriptPath;
-	_env["QUERY_STRING"] = _request->getQuery();
-	_env["SERVER_PROTOCOL"] = _request->getProtocol();
-	_env["HTTP_HOST"] = _request->getHeader("host");
-	_env["CONTENT_LENGTH"] = Utils::toString(_request->getContentLength());
-	_env["CONTENT_TYPE"] = _request->getHeader("content-type");
+	_env["QUERY_STRING"] = request->getQuery();
+	_env["SERVER_PROTOCOL"] = request->getProtocol();
+	_env["HTTP_HOST"] = request->getHeader("host");
+	_env["CONTENT_LENGTH"] = Utils::toString(request->getContentLength());
+	_env["CONTENT_TYPE"] = request->getHeader("content-type");
+	_env["PYTHONIOENCODING"] = "utf-8";
 
-	const std::map<std::string, std::string>& headers = _request->getHeaders();
-	std::map<std::string, std::string>::const_iterator it;
-	for (it = headers.begin(); it != headers.end(); ++it)
+	const std::map<std::string, std::string>& headers = request->getHeaders();
+	for (std::map<std::string, std::string>::const_iterator it = headers.begin(); it != headers.end(); ++it)
 	{
 		if (it->first == "host" || it->first == "content-type")
 			continue;
@@ -90,23 +70,40 @@ void CGIHandler::setEnv()
 		for (std::string::size_type i = 0; i < it->first.size(); ++i)
 		{
 			char c = it->first[i];
-			envName += (c == '-') ? '_' : static_cast<char>(std::toupper(c));
+			envName += (c == '-') ? '_' : static_cast<char>(toupper(c));
 		}
 		_env[envName] = it->second;
 	}
 
-	_env["PYTHONIOENCODING"] = "utf-8";
 }
+
+
+CGIHandler::~CGIHandler()
+{
+	cleanup();
+}
+
+
+
+void CGIHandler::validatePaths() const
+{
+	if (_execPath.empty() || _scriptPath.empty())
+		throw std::invalid_argument("Empty CGI paths");
+
+	if (access(_execPath.c_str(), F_OK) != 0)
+		throw std::invalid_argument("File not found");
+
+	if (access(_execPath.c_str(), X_OK) != 0 || access(_scriptPath.c_str(), R_OK) != 0)
+		throw std::runtime_error("Invalid Permissions");
+}
+
 
 void CGIHandler::buildEnv()
 {
 	cleanEnv();
 	_envp = new char*[_env.size() + 1];
-
-	std::map<std::string, std::string>::const_iterator it;
 	int index = 0;
-
-	for (it = _env.begin(); it != _env.end(); ++it)
+	for (std::map<std::string, std::string>::const_iterator it = _env.begin(); it != _env.end(); ++it)
 	{
 		std::string envVar = it->first + "=" + it->second;
 		_envp[index++] = strdup(envVar.c_str());
@@ -114,11 +111,12 @@ void CGIHandler::buildEnv()
 	_envp[index] = NULL;
 }
 
+
 void CGIHandler::buildArgv()
 {
 	cleanArgv();
 	_argv = new char*[3];
-		_argv[0] = strdup(_execPath.c_str());
+	_argv[0] = strdup(_execPath.c_str());
 	_argv[1] = strdup(_scriptPath.c_str());
 	_argv[2] = NULL;
 }
@@ -145,75 +143,117 @@ void CGIHandler::cleanArgv()
 	}
 }
 
-void CGIHandler::start()
+time_t CGIHandler::getStartTime() const 
 {
-	buildEnv();
-	buildArgv();
-
-	_pid = fork();
-	if (_pid < 0)
-		throw std::runtime_error("Fork failed: " + std::string(strerror(errno)));
-
-	if (_pid == 0) // Child process
-	{
-		// Open input file for body if it exists
-		int inFd = open(_request->getBodyfile().c_str(), O_RDONLY);
-		if (inFd == -1)
-		{
-			std::cerr << "Failed to open input file: " << strerror(errno) << std::endl;
-			_exit(EXIT_FAILURE);
-		}
-
-		// Setup pipes
-		close(_pipeFd[0]);  // Close read end
-		if (dup2(inFd, STDIN_FILENO) == -1 || dup2(_pipeFd[1], STDOUT_FILENO) == -1)
-		{
-			std::cerr << "Failed to setup pipes: " << strerror(errno) << std::endl;
-			_exit(EXIT_FAILURE);
-		}
-
-		close(inFd);
-		close(_pipeFd[1]);
-
-		execve(_execPath.c_str(), _argv, _envp);
-		std::cerr << "execve failed: " << strerror(errno) << std::endl;
-		_exit(EXIT_FAILURE);
-	}
-
-	// Parent process
-	close(_pipeFd[1]);  // Close write end
-
-	// Set non-blocking read
-	int flags = fcntl(_pipeFd[0], F_GETFL, 0);
-	if (flags != -1)
-		fcntl(_pipeFd[0], F_SETFL, flags | O_NONBLOCK);
+	return _startTime;
 }
 
-void CGIHandler::cleanup()
+bool CGIHandler::isRunning(int& status)
 {
-	if (_pid > 0)
+	if (_pid <= 0)
+		return false;
+	pid_t result = waitpid(_pid, &status, WNOHANG);
+	if (result == _pid)
 	{
-		kill(_pid, SIGTERM);
+		_pid = -1;
+		return false;
+	}
+	if (result == 0)
+	{
+		return true;
+	}
+	return false;
+}
+
+
+void CGIHandler::killProcess()
+{
+	if (_pid > 0) 
+	{
+		kill(_pid, SIGKILL);
+		waitpid(_pid, NULL, 0); 
 		_pid = -1;
 	}
-
-	if (!_pipeClosed && _pipeFd[0] >= 0)
-	{
-		close(_pipeFd[0]);
-		_pipeFd[0] = -1;
-		_pipeClosed = true;
-	}
-
-	cleanEnv();
-	cleanArgv();
 }
 
-int CGIHandler::getPipeFd() const
+
+bool CGIHandler::hasTimedOut()
 {
-	return _pipeFd[0];
+	if (_pid <= 0)
+		return false;
+
+	time_t now = time(NULL);
+	return (now - _startTime) > CGI_TIMEOUT;
+}
+
+
+void CGIHandler::start()
+{
+	buildArgv();
+	buildEnv();
+	_startTime = time(NULL);
+
+
+	_pid = fork();
+	if (_pid < 0) 
+	{
+		close(_ouFd);
+		throw std::runtime_error("Fork failed: " + std::string(strerror(errno)));
+	}
+
+	if (_pid == 0) 
+	{
+		if (dup2(_inFd, STDIN_FILENO) == -1) 
+		{
+			close(_inFd);
+			close(_ouFd);
+			exit(EXIT_FAILURE);
+		}
+		close(_inFd);
+		if (dup2(_ouFd, STDOUT_FILENO) == -1) 
+		{
+			close(_ouFd);
+			exit(EXIT_FAILURE);
+		}
+
+		if (dup2(_ouFd, STDERR_FILENO) == -1) 
+		{
+			close(_ouFd);
+			exit(EXIT_FAILURE);
+		}
+		close(_ouFd);
+
+		execve(_execPath.c_str(), _argv, _envp);
+		exit(EXIT_FAILURE);
+	}
+}
+
+
+std::string CGIHandler::getOutputFile() const
+{
+	return _outputFile;
 }
 
 pid_t CGIHandler::getPid() const
 {
 	return _pid;
+}
+
+void CGIHandler::cleanup()
+{
+
+	if (_ouFd != -1) 
+	{
+		close(_ouFd);
+		_ouFd = -1;
+	}
+	if (_inFd != -1) 
+	{
+		close(_inFd);
+		_inFd = -1;
+	}
+	if (!_outputFile.empty()) 
+		std::remove(_outputFile.c_str());
+	cleanEnv();
+	cleanArgv();
 }

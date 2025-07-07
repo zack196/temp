@@ -1,430 +1,280 @@
 #include "../include/ServerManager.hpp"
-#include "../include/ServerConfig.hpp"
-#include "../include/HTTPResponse.hpp"
 #include "../include/CGIHandler.hpp"
-#include "../include/Utils.hpp"
 #include "../include/Logger.hpp"
-#include "../include/Client.hpp"
-#include "../include/SessionManager.hpp"
-#include <cstddef>
-#include <iostream>
-#include <string>
+#include <netinet/in.h>
+#include <stdexcept>
+#include <sys/epoll.h>
+#include <wait.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <cstring>
 #include <errno.h>
+#include <algorithm>
 
-
-ServerManager::ServerManager(const std::vector<ServerConfig>& servers) : _epollManager(MAX_EVENTS), _running(false), _clientTimeout(CLIENT_TIMEOUT), _maxClients(MAX_CLIENTS), _servers(servers)
+ServerManager::ServerManager(const std::vector<ServerConfig>& servers) : _epoll(EVENTS), _running(false), _servers(servers)
 {
-	LOG_INFO("ServerManager initialized with timeout=" + Utils::toString(_clientTimeout) + "s, maxClients=" + Utils::toString(_maxClients));
 }
 
 ServerManager::~ServerManager()
 {
-	LOG_INFO("ServerManager shutting down");
-	for (std::map<int, Client*>::iterator it = _clients.begin(); it != _clients.end(); ++it)
+	for (std::map<int, Client*>::iterator it = _clients.begin(); it != _clients.end(); ++it) 
 	{
 		close(it->first);
 		delete it->second;
 	}
 	_clients.clear();
+
+	for (size_t i = 0; i < _serverFds.size(); ++i)
+		close(_serverFds[i]);
+	_serverFds.clear();
+}
+
+int ServerManager::createAndBindSocket(const std::string& host, uint16_t port)
+{
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd < 0)
+		return -1;
+
+	int opt = 1;
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+		return (close(sockfd), -1);
+
+	if (fcntl(sockfd, F_SETFL, O_NONBLOCK) < 0)
+		return (close(sockfd), -1);
+
+	struct sockaddr_in address;
+	memset(&address, 0, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_port = htons(port);
+
+	if (inet_pton(AF_INET, host.c_str(), &address.sin_addr) <= 0)
+		return (close(sockfd), -1);
+
+	if (bind(sockfd, (struct sockaddr*)&address, sizeof(address)) < 0)
+		return (close(sockfd), -1);
+
+
+	if (listen(sockfd, 10) < 0)
+		return (close(sockfd), -1);
+
+
+	return sockfd;
 }
 
 bool ServerManager::init()
 {
+	std::map<std::string, std::map<uint16_t, int> > host_port_fd;
 	for (size_t i = 0; i < _servers.size(); ++i)
 	{
-		try 
+		try
 		{
-			_servers[i].setupServer();
-			const std::vector<int>& fds = _servers[i].getFds();
-			const std::vector<uint16_t>& ports = _servers[i].getPorts();
-			for (size_t j = 0; j < fds.size(); ++j)
+			const std::map<std::string, std::vector<uint16_t> >& host_ports = _servers[i].getHostPort();
+
+			std::map<std::string, std::vector<uint16_t> >::const_iterator it;
+			for (it = host_ports.begin(); it != host_ports.end(); ++it)
 			{
-				_serverMap[fds[j]] = &_servers[i];
-				if (!_epollManager.add(fds[j], EPOLLIN))
-					return false;
-				LOG_INFO("Server socket " + Utils::toString(fds[j]) + " listening on " 
-					+ _servers[i].getHost() + ":" + Utils::toString(ports[j]));
+				const std::string& host = it->first;
+				const std::vector<uint16_t>& ports = it->second;
+
+				for (size_t j = 0; j < ports.size(); ++j)
+				{
+					uint16_t port = ports[j];
+
+					if (host_port_fd.count(host) && host_port_fd[host].count(port))
+						continue;
+
+					int fd = createAndBindSocket(host, port);
+					if (fd < 0)
+						throw std::runtime_error("Failed to bind socket for " + host + ":" + Utils::toString(port));
+
+					if (!_epoll.add(fd, EPOLLIN))
+					{
+						close(fd);
+						throw std::runtime_error("Failed to add socket to epoll for " + host + ":" + Utils::toString(port));
+					}
+					host_port_fd[host][port] = fd;
+					_serverFds.push_back(fd);
+
+					LOG_INFO("servser " + Utils::toString(i) + " Listening on " + host + ":" + Utils::toString(port) + " (fd " + Utils::toString(fd) + ")");
+				}
 			}
 		}
 		catch (const std::exception& e)
 		{
-			LOG_ERROR("Error setting up server: " + std::string(e.what()));
+			LOG_ERROR(e.what());
 			return false;
 		}
 	}
 	return true;
 }
 
+
 void ServerManager::run()
 {
 	_running = true;
-	LOG_INFO("Starting server event loop");
-
-	while (_running)
+	while (_running) 
 	{
-		int numEvents = _epollManager.wait(1000);
-		if (numEvents < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			LOG_ERROR("Epoll wait error: " + std::string(std::strerror(errno)));
-			break;
+		try {
+			int numEvents = _epoll.wait(1000);
+
+			if (numEvents < 0) 
+			{
+				if (errno == EINTR)
+					continue;
+				else 
+					throw std::runtime_error("epoll_wait failed");
+			}
+			for (int i = 0; i < numEvents; ++i) 
+				handleEvent(_epoll.getEvent(i));
+			checkTimeouts();
 		}
-		for (int i = 0; i < numEvents; ++i)
+		catch (const std::exception& e) 
 		{
-			const epoll_event& event = _epollManager.getEvent(i);
-			handleEvent(event);
+			LOG_ERROR("ERROR in main event loop " + std::string(e.what()));
 		}
-		checkClientTimeouts();
 	}
-	LOG_INFO("Server event loop stopped");
+
 }
 
 void ServerManager::stop()
 {
-	LOG_INFO("Stopping server");
 	_running = false;
 }
 
-void ServerManager::handleEvent(const struct epoll_event& event)
+void ServerManager::handleEvent(const epoll_event& event)
 {
 	int fd = event.data.fd;
 	uint32_t events = event.events;
-	ServerConfig* server = findServerByFd(fd);
 
-	if (server)
-	{
+	try {
+		if (events & EPOLLHUP)
+			throw std::runtime_error("EPOLL hangup fd " + Utils::toString(fd) + ", events: " + Utils::toString(events));
+
+		if (events & EPOLLERR)
+			throw std::runtime_error("EPOLL error fd " + Utils::toString(fd) + ", events: " + Utils::toString(events));
+
 		if (events & EPOLLIN)
-			if (!acceptClient(fd, server))
-				LOG_ERROR("Failed to accept client on server fd: " + Utils::toString(fd));
-		return;
-	}
-
-	Client* client = findClientByFd(fd);
-	if (!client)
-	{
-		_epollManager.remove(fd);
-		return;
-	}
-
-	if (events & (EPOLLERR | EPOLLHUP))
-	{
-		cleanupClient(fd, (events & EPOLLERR) ? "Socket error" : "Connection hangup");
-		return;
-	}
-
-	if (events & EPOLLIN)
-	{
-		if (client->isCgi())
-			handleCgiResponse(client);
-		else
 		{
-			if (!receiveFromClient(client))
-				return(cleanupClient(fd, "Connection complete"));
+			if (std::find(_serverFds.begin(), _serverFds.end(), fd) != _serverFds.end())
+				acceptClient(fd);
 
-			if (client->getRequest()->hasCgi() && client->getRequest()->isComplete())
-				startCgi(client);
+			if (_clients.find(fd) != _clients.end())
+			{	
+				_clients[fd]->updateActivity();
+				_clients[fd]->getRequest()->setClientfd(fd);
+				_clients[fd]->readRequest();
+				if (_clients[fd]->getRequest()->isComplete()) 
+				{
+					_clients[fd]->getResponse()->buildResponse();
+					if (!_epoll.modify(fd, EPOLLOUT)) 
+						throw std::runtime_error("Failed to modify epoll to EPOLLOUT");
+				}
+			}
+		}
+
+		if (events & EPOLLOUT)
+		{
+			_clients[fd]->updateActivity();
+			if (_clients[fd]->getResponse()->isReady())
+				_clients[fd]->sendResponse();
+			if (_clients[fd]->getResponse()->isComplete())
+			{
+				if (!_epoll.modify(fd, EPOLLIN))
+					throw std::runtime_error("Failed to modify epoll to EPOLLIN");
+
+				if(_clients[fd]->shouldKeepAlive())
+					_clients[fd]->reset();
+				else 
+					cleanupClient(fd);
+
+			}
 		}
 	}
-	else if ((events & EPOLLOUT))
+	catch (const std::exception& e) 
 	{
-		if (!sendToClient(client))
-			return(cleanupClient(fd, "Connection complete"));
+		LOG_ERROR(e.what());
+		cleanupClient(fd);
 	}
 }
 
 
-bool ServerManager::acceptClient(int serverFd, ServerConfig* serverConfig)
+
+void ServerManager::acceptClient(int fd) 
 {
 	struct sockaddr_in clientAddr;
 	socklen_t clientAddrLen = sizeof(clientAddr);
-	int clientFd = accept(serverFd, (struct sockaddr*)&clientAddr, &clientAddrLen);
-	if (clientFd == -1)
-		return false;
 
-	if (_clients.size() >= static_cast<size_t>(_maxClients))
-	{
-		LOG_WARN("Max clients reached (" + Utils::toString(_maxClients) + "), rejecting new connection");
-		close(clientFd);
-		return false;
-	}
+	int clientFd = accept(fd, (struct sockaddr *)&clientAddr, &clientAddrLen);
 
-	int flags = fcntl(clientFd, F_GETFL, 0);
-	if (flags == -1 || fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
-	{
-		close(clientFd);
-		return false;
-	}
-	try
-	{
-		Client* client = new Client(clientFd, serverConfig);
-		_clients[clientFd] = client;
-		if (!_epollManager.add(clientFd, EPOLLIN))
-		{
-			delete client;
-			_clients.erase(clientFd);
-			close(clientFd);
-			return false;
-		}
-		std::string clientIp = inet_ntoa(clientAddr.sin_addr);
-		int clientPort = ntohs(clientAddr.sin_port);
-		LOG_INFO("New client connected from " + clientIp + ":" + Utils::toString(clientPort) + " (fd: " + Utils::toString(clientFd) + ", total: " + Utils::toString(_clients.size()) + ")");
-		return true;
-	}
-	catch (const std::exception& e)
-	{
-		LOG_ERROR("Error creating client: " + std::string(e.what()));
-		close(clientFd);
-		return false;
-	}
-}
-
-bool ServerManager::receiveFromClient(Client* client)
-{
-	if (!client)
-		return false;
-
-	char buffer[BUFFER_SIZE];
-	std::memset(buffer, 0, BUFFER_SIZE);
-	ssize_t bytesRead = recv(client->getFd(), buffer, sizeof(buffer) - 1, 0);
-
-
-	// --------------- handel if the session exist and get /login -----------------
-	Session& sess = *client->getSession();
-	HTTPRequest	*req = client->getRequest();
-	
-	if ( req->getMethod() == "GET"
-	     && req->getPath() == "/login"
-	     && sess.data.count("user") )            // ← already authenticated
-	{
-	    HTTPResponse* res = client->getResponse();
-
-	    res->setProtocol(req->getProtocol());
-	    res->setStatusCode(302);                 // 302 Found
-	    res->setStatusMessage("Found");
-	    res->setHeader("Location", "/");         // where to send him
-	    res->setHeader("Content-Length", "0");
-	    res->setHeader("Connection",
-	                   res->shouldCloseConnection() ? "close" : "keep-alive");
-	    res->buildHeader();                      // no body, header only
-
-	    // flip the socket to EPOLLOUT right here
-	    _epollManager.modify(client->getFd(), EPOLLOUT);
-	    return true;                             // short-circuit normal buildResponse()
-	}
-
-	if (bytesRead > 0)
-	{
-		client->updateActivity();
-		client->setReadBuffer(buffer, bytesRead);
-		client->getRequest()->parse(client->getReadBuffer());
-		
-		if (client->getRequest()->isComplete() && !client->getRequest()->hasCgi())
-		{
-			client->setSession(&SessionManager::get().acquire(client->getRequest(), client->getResponse()));
-
-			// print the sid of all session in webserv
-			SessionManager::get().printSession();
-			// login logic
-
-			if (LoginController::handle(client->getRequest(), client->getResponse(), *client->getSession()))
-				client->getResponse()->buildHeader();
-			else
-				client->getResponse()->buildResponse();
-
-			if (!_epollManager.modify(client->getFd(), EPOLLOUT))
-				return false;
-		}
-		return true;
-	}
-
-	if (bytesRead == 0)
-	{
-		LOG_INFO("Client fd " + Utils::toString(client->getFd()) + " closed connection");
-		return false;
-	}
-	LOG_ERROR("Error receiving from client fd " + Utils::toString(client->getFd()) + ": " + std::string(std::strerror(errno)));
-	return false;
-}
-
-bool	ServerManager::sendToClient(Client* client)
-{
-	if (!client)
-		return false;
-
-	char buffer[BUFFER_SIZE];
-	ssize_t bytesToSend = client->getResponseChunk(buffer, sizeof(buffer));
-	if (bytesToSend > 0)
-	{
-		ssize_t bytesSent = send(client->getFd(), buffer, bytesToSend, 0);
-		if (bytesSent <= 0)
-		{
-			LOG_ERROR("Error sending to client fd " + Utils::toString(client->getFd()) + ": " + std::string(std::strerror(errno)));
-			return false;
-		}
-		return true;
-	}
-
-	else if (bytesToSend == 0)
-	{
-		if (!client->shouldKeepAlive())
-			return (LOG_INFO("closing connection for client fd " + Utils::toString(client->getFd())), false);
-
-		if (!_epollManager.modify(client->getFd(), EPOLLIN))
-			return false;
-		client->reset();
-		LOG_INFO("Keeping connection alive for client fd " + Utils::toString(client->getFd()));
-		return true;
-	}
-	LOG_ERROR("Error generating response for client fd "+ Utils::toString(client->getFd()));
-	return false;
-}
-
-void ServerManager::startCgi(Client* client)
-{
-	try
-	{
-		CGIHandler* cgiHandler = new CGIHandler(client->getRequest(), client->getResponse());
-		cgiHandler->setEnv();
-		cgiHandler->start();
-		client->updateActivity();
-		client->setCgiHandler(cgiHandler);
-		client->setCgiStartTime(time(NULL));
-		client->setIsCgi(true);
-
-		_epollManager.add(cgiHandler->getPipeFd(), EPOLLIN);
-		LOG_INFO("CGI process started for URI: " + client->getRequest()->getUri());
-	}
-	catch (const std::exception& e)
-	{
-		LOG_ERROR("Error starting CGI process: " + std::string(e.what()));
-		cleanupClient(client->getFd(), "Failed to start CGI process");
-	}
-}
-
-void ServerManager::handleCgiResponse(Client* client)
-{
-	if (!client || !client->isCgi())
+	if (clientFd == -1) 
 		return;
+	
+	char client_ip[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &(clientAddr.sin_addr), client_ip, INET_ADDRSTRLEN);
+	int client_port = ntohs(clientAddr.sin_port);
+	LOG_INFO(std::string("Client connected from ") + client_ip + ":" + Utils::toString(client_port) + " (fd " + Utils::toString(clientFd) + ")");
 
-	char buffer[BUFFER_SIZE] = {0};
-	ssize_t bytesRead;
+	if (_clients.size() >= CLIENTS)
+	{
+		close(clientFd);
+		return;
+	}
+
+	if (fcntl(clientFd, F_SETFL, O_NONBLOCK) == -1) 
+	{
+		close(clientFd);
+		return;
+	}
 
 	try 
 	{
-		while ((bytesRead = read(client->getCgiHandler()->getPipeFd(), buffer, BUFFER_SIZE - 1)) > 0)
-		{
-			client->updateActivity();
-			client->getResponse()->parseCgiOutput(std::string(buffer, bytesRead));
-			std::memset(buffer, 0, BUFFER_SIZE);  // Clear buffer for next read
-		}
-		if (bytesRead <= 0) 
-		{
-			_epollManager.remove(client->getCgiHandler()->getPipeFd());
-			client->getResponse()->buildResponse();
-			client->setIsCgi(false);
+		Client* client = new Client(clientFd, _servers);
 
-			if (!_epollManager.modify(client->getFd(), EPOLLOUT))
-				throw std::runtime_error("Failed to modify client to EPOLLOUT mode");
-
-			LOG_INFO("CGI response completed for client fd: " + Utils::toString(client->getFd()));
+		_clients[clientFd] = client;
+		if (!_epoll.add(clientFd, EPOLLIN)) 
+		{
+			delete client;
+			close(clientFd);
+			return;
 		}
-	}
-	catch (const std::exception& e)
+	} 
+
+	catch (const std::exception& e) 
 	{
-		LOG_ERROR("Failed to handle CGI response: " + std::string(e.what()));
-		cleanupClient(client->getFd(), "Error during CGI response handling: " + std::string(e.what()));
+		LOG_DEBUG(e.what());
+		close(clientFd);
 	}
 }
 
-void ServerManager::cleanupClient(int fd, const std::string& reason)
+void ServerManager::checkTimeouts()
 {
-	std::map<int, Client*>::iterator it = _clients.find(fd);
-	if (it != _clients.end())
-	{
-		Client* client = it->second;
-		if (client->isCgi() && client->getCgiHandler() != NULL)
-		{
-			_epollManager.remove(client->getCgiHandler()->getPipeFd());
-			client->getCgiHandler()->cleanup();
-			LOG_INFO("Cleaned up CGI process for client fd: " + Utils::toString(fd) + ", reason: " + reason);
-		}
-
-		LOG_INFO("Client disconnected (fd: " + Utils::toString(fd) + ", reason: " + reason + ", remaining: " + Utils::toString(_clients.size() - 1) + ")");
-		delete it->second;
-		_clients.erase(it);
-	}
-
-	_epollManager.remove(fd);
-	close(fd);
-}
-
-void ServerManager::checkClientTimeouts()
-{
-	if (_clientTimeout <= 0)
-		return;
-
 	time_t currentTime = time(NULL);
-	std::vector<int> timeoutFds;
 
-	for (std::map<int, Client*>::iterator it = _clients.begin(); it != _clients.end(); ++it)
+	for (std::map<int, Client*>::iterator it = _clients.begin(); it != _clients.end(); )
 	{
-		Client* client = it->second;
-		if (client->isCgi())
+		if ((currentTime - it->second->getLastActivity()) >= TIMEOUT)
 		{
-			if ((currentTime - client->getCgiStartTime()) >= _clientTimeout)
-				timeoutFds.push_back(it->first);
+			int fd = it->first;
+			LOG_DEBUG("Client timed out  " + Utils::toString(fd));
+
+			cleanupClient(fd);
+
+			it = _clients.begin();
 		}
 		else
-	{
-			if ((currentTime - client->getLastActivity()) >= _clientTimeout)
-				timeoutFds.push_back(it->first);
-		}
+			++it;
 	}
-
-	for (size_t i = 0; i < timeoutFds.size(); ++i)
-		cleanupClient(timeoutFds[i], "Connection timed out");
-
-	if (!timeoutFds.empty())
-		LOG_INFO("Cleaned up " + Utils::toString(timeoutFds.size()) + " client(s) due to " + Utils::toString(_clientTimeout) + "s timeout");
-
-	// delete the expired session
-	SessionManager::get().reapExpired(currentTime);
 }
 
-ServerConfig* ServerManager::findServerByFd(int fd)
-{
-	std::map<int, ServerConfig*>::iterator it = _serverMap.find(fd);
-	if (it != _serverMap.end())
-		return it->second;
-	return NULL;
-}
-
-Client* ServerManager::findClientByFd(int fd)
+void ServerManager::cleanupClient(int fd)
 {
 	std::map<int, Client*>::iterator it = _clients.find(fd);
-	if (it != _clients.end())
-		return it->second;
 
-	for (std::map<int, Client*>::iterator cIt = _clients.begin(); cIt != _clients.end(); ++cIt)
+	if (it != _clients.end()) 
 	{
-		Client* c = cIt->second;
-		if (c->isCgi() && c->getCgiHandler() && c->getCgiHandler()->getPipeFd() == fd)
-			return c;
+		_epoll.remove(fd);
+		delete it->second;
+		_clients.erase(it);
+		close(fd);
+		LOG_DEBUG("Client disconnected  " + Utils::toString(fd));
 	}
-	return NULL;
-}
-
-void ServerManager::setClientTimeout(int seconds)
-{
-	_clientTimeout = seconds;
-	LOG_INFO("Client timeout set to " + Utils::toString(seconds) + " seconds");
-}
-
-size_t ServerManager::getActiveClientCount() const
-{
-	return _clients.size();
 }

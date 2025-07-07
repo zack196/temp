@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login | Webserv 1337</title>
+  <style>
+    :root {
+      --black: #111;
+      --green: #2ecc71;
+      --white: #fff;
+      --gray-dark: #222;
+      --gray-light: #999;
+      --font-main: system-ui, sans-serif;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: var(--black);
+      font-family: var(--font-main);
+      color: var(--white);
+    }
+
+    .login-form {
+      background: var(--gray-dark);
+      padding: 2rem;
+      border-radius: 8px;
+      width: 100%;
+      max-height: 500px;
+      max-width: 500px;
+    }
+
+    h2 {
+      font-size: 1.75rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+    }
+
+    h2::after {
+      content: '';
+      display: block;
+      width: 40px;
+      height: 3px;
+      background: var(--green);
+      margin-top: 8px;
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: var(--gray-light);
+      font-size: 0.9rem;
+    }
+
+    input[type="text"],
+    input[type="password"] {
+      width: 100%;
+      padding: 0.75rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      color: var(--white);
+      font-size: 1rem;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--green);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 0.75rem;
+      background: var(--green);
+      color: var(--black);
+      border: none;
+      border-radius: 4px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .btn:hover {
+      background: #27ae60;
+    }
+  </style>
+</head>
+<body>
+  <form class="login-form" action="/login" method="POST" autocomplete="off">
+    <h2>Login</h2>
+
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" required autofocus />
+    </div>
+
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required />
+    </div>
+
+    <button type="submit" class="btn">Login</button>
+  </form>
+</body>
+</html>
+

@@ -1,4 +1,5 @@
 #include "../include/ServerConfig.hpp"
+#include "../include/ConfigParser.hpp"
 #include "../include/Utils.hpp"
 #include <netinet/in.h>
 #include <sstream>
@@ -7,58 +8,62 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
+#include <algorithm>
 #include <stdexcept>
+#include <cstdlib>
 
-ServerConfig::ServerConfig() : _host("0.0.0.0"), _serverName(""), _clientMaxBodySize(1024 * 1024) //1MB
+ServerConfig::ServerConfig() : _host(""), _serverName("default"), _root("./www/html"), _clientMaxBodySize(1048576), _clientBodyTmpPath("/tmp"), _errorPages(), _isDefault(false)
 {
+}
+
+ServerConfig::ServerConfig(const std::string& configFilePath)
+{
+	ConfigParser parser(configFilePath);
+	parser.parseFile();
+	_servers = parser.getServers();
 }
 
 ServerConfig::~ServerConfig() 
 {
-	cleanupServer();
 }
 
-ServerConfig::ServerConfig(const ServerConfig& rhs) : _host(""), _serverName(""), _clientMaxBodySize(0)
+void ServerConfig::setRoot(const std::string& root)
 {
-	*this = rhs;
+	_root = root;
 }
 
-ServerConfig& ServerConfig::operator=(const ServerConfig& rhs) 
+std::string ServerConfig::getRoot() const 
 {
-	if (this != &rhs) 
-	{
-		cleanupServer();
-
-		_host = rhs._host;
-		_ports = rhs._ports;
-		_serverName = rhs._serverName;
-		_clientMaxBodySize = rhs._clientMaxBodySize;
-		_clientBodyTmpPath = rhs._clientBodyTmpPath;
-		_errorPages = rhs._errorPages;
-		_locations = rhs._locations;
-	}
-	return *this;
+	return _root;
 }
 
-const LocationConfig* ServerConfig::findLocation(const std::string& path) const 
+
+std::vector<ServerConfig> ServerConfig::getServers() const 
+{
+	return _servers;
+}
+
+const LocationConfig& ServerConfig::findLocation(const std::string& path) const 
 {
 	const std::map<std::string, LocationConfig>& locations = getLocations();
-	const LocationConfig* bestMatch = NULL;
+	std::map<std::string, LocationConfig>::const_iterator bestMatch = locations.end();
 	size_t bestLength = 0;
+
 	for (std::map<std::string, LocationConfig>::const_iterator it = locations.begin();
 	it != locations.end(); ++it)
 	{
 		const std::string& locPath = it->first;
-		if (path.compare(0, locPath.length(), locPath) == 0 &&
-			locPath.length() > bestLength &&
+		if (path.compare(0, locPath.length(), locPath) == 0 && locPath.length() > bestLength &&
 			(path.length() == locPath.length() || path[locPath.length()] == '/' || locPath == "/"))
 		{
-			bestMatch = &it->second;
+			bestMatch = it;
 			bestLength = locPath.length();
 		}
 	}
-	return bestMatch;
+	return bestMatch->second;
 }
+
+
 
 bool ServerConfig::isValidHost(const std::string& host) 
 {
@@ -66,76 +71,103 @@ bool ServerConfig::isValidHost(const std::string& host)
 	return inet_pton(AF_INET, host.c_str(), &addr) == 1;
 }
 
-void ServerConfig::setHost(const std::string& host) 
+
+void ServerConfig::setHostPort(const std::string& hostPort) 
 {
-	if (host.empty()) 
+	if (hostPort.empty()) 
+		throw std::runtime_error("Host:Port cannot be empty");
+
+	size_t colonPos = hostPort.find(':');
+	std::string host;
+	std::string portStr;
+
+	if (colonPos == std::string::npos) 
 	{
-		_host = "0.0.0.0";
-		return;
+		host = "0.0.0.0";
+		portStr = hostPort;
 	}
-
-	if (isValidHost(host)) 
-	{
-		_host = host;
-		return;
-	}
-
-	// Otherwise, try to resolve the hostname to an IP address
-	struct addrinfo hints, *res = NULL;
-	std::memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-
-	int status = getaddrinfo(host.c_str(), NULL, &hints, &res);
-	if (status != 0) 
-	{
-		throw std::runtime_error("Failed to resolve hostname '" + host + "': " + gai_strerror(status));
-	}
-
-	if (res != NULL) 
-	{
-		struct sockaddr_in* ipv4 = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
-		_host = inet_ntoa(ipv4->sin_addr);
-		freeaddrinfo(res);
-	} 
 	else 
 	{
-		freeaddrinfo(res);
-		throw std::runtime_error("No addresses found for host: " + host);
-	}
-}
+		host = hostPort.substr(0, colonPos);
+		portStr = hostPort.substr(colonPos + 1);
 
-void ServerConfig::setPort(const std::string& portStr) 
-{
-	if (portStr.empty()) 
-		throw std::runtime_error("Port cannot be empty");
+		if (host.empty()) 
+			throw std::runtime_error("Host cannot be empty in: " + hostPort);
+		if (portStr.empty()) 
+			throw std::runtime_error("Port cannot be empty after colon");
+	}
 
 	for (size_t i = 0; i < portStr.length(); ++i) 
-	{
-		if (!isdigit(portStr[i])) 
+		if (!std::isdigit(portStr[i])) 
 			throw std::runtime_error("Port must contain only digits: " + portStr);
-	}
 
-	// Convert to integer and validate range
 	int port = std::atoi(portStr.c_str());
 	if (port < 1 || port > 65535) 
 		throw std::runtime_error("Port out of range (1-65535): " + portStr);
 
-	_ports.push_back(port);
+	std::string resolved_host;
+
+	if (isValidHost(host)) 
+		resolved_host = host;
+	else 
+	{
+		struct hostent* he = gethostbyname(host.c_str());
+		if (!he || he->h_addr_list[0] == NULL)
+			throw std::runtime_error("Failed to resolve hostname '" + host + "'");
+
+		resolved_host = inet_ntoa(*reinterpret_cast<struct in_addr*>(he->h_addr_list[0]));
+	}
+
+	std::vector<uint16_t>& ports = _host_ports[resolved_host];
+	for (size_t i = 0; i < ports.size(); ++i)
+		if (ports[i] == port)
+			throw std::runtime_error("Port " + portStr + " already assigned to host: " + resolved_host);
+
+	ports.push_back(port);
+}
+
+std::vector<uint16_t> ServerConfig::getPortsByHost(const std::string& host) const
+{
+	std::map<std::string, std::vector<uint16_t> >::const_iterator it = _host_ports.find(host);
+	if (it != _host_ports.end())
+		return it->second;
+	return std::vector<uint16_t>();
+}
+
+
+const std::map<std::string, std::vector<uint16_t> >& ServerConfig::getHostPort() const 
+{
+	return _host_ports;
+}
+
+LocationConfig& ServerConfig::getLocation(const std::string& key)
+{
+	std::map<std::string, LocationConfig>::iterator it = _locations.find(key);
+	if (it != _locations.end()) 
+		return it->second;
+	else 
+		throw std::runtime_error("Location key not found: " + key);
 }
 
 void ServerConfig::setServerName(const std::string& name) 
 {
+	if (_serverName != "default")
+		throw std::runtime_error("the server name duplicated");
 	_serverName = name;
+
 }
 
 void ServerConfig::setClientMaxBodySize(const std::string& size) 
 {
+	if ( _clientMaxBodySize != 1048576)
+		throw std::runtime_error("the _clientMaxBodySize  duplicated");
 	_clientMaxBodySize = Utils::stringToSizeT(size);
 }
 
 void ServerConfig::setClientBodyTmpPath(const std::string& path) 
 {
+	if ( _clientBodyTmpPath != "/tmp")
+		throw std::runtime_error("the _clientBodyTmpPath duplicated");
 	_clientBodyTmpPath = path;
 }
 
@@ -161,27 +193,19 @@ void ServerConfig::setErrorPage(const std::string& value)
 	if (!(iss >> path)) 
 		throw std::runtime_error("Missing path in error_page directive");
 
+	if (_errorPages.find(code) != _errorPages.end())
+		throw std::runtime_error("Duplicate error code in error_page directive: " + codeStr);
+
 	_errorPages[code] = path;
 }
 
-void ServerConfig::addLocation(const std::string& path, const LocationConfig& location) 
-{
-	_locations[path] = location;
-}
 
-const std::string& ServerConfig::getHost() const 
+void ServerConfig::addLocation(std::string path, LocationConfig location)
 {
-	return _host;
-}
+    if (_locations.count(path) > 0)
+        throw std::runtime_error("Duplicate location path: " + path);
 
-uint16_t ServerConfig::getPort() const 
-{
-	return _ports.empty() ? 0 : _ports[0];
-}
-
-const std::vector<uint16_t>& ServerConfig::getPorts() const 
-{
-	return _ports;
+    _locations[path] = location;
 }
 
 const std::string& ServerConfig::getServerName() const 
@@ -204,7 +228,7 @@ std::string ServerConfig::getErrorPage(int statusCode) const
 	std::string message = Utils::getMessage(statusCode);
 
 	std::map<int, std::string>::const_iterator it = _errorPages.find(statusCode);
-	if (it != _errorPages.end() && Utils::fileExists(it->second))
+	if (it != _errorPages.end() && Utils::isFileExists(it->second))
 		return it->second;
 
 	std::ostringstream oss;
@@ -218,95 +242,7 @@ std::string ServerConfig::getErrorPage(int statusCode) const
 	return oss.str();
 }
 
-int ServerConfig::getFd(size_t index) const 
-{
-	if (index >= _server_fds.size()) 
-		throw std::runtime_error("File descriptor index out of range");
-
-	return _server_fds[index];
-}
-
-const std::vector<int>& ServerConfig::getFds() const 
-{
-	return _server_fds;
-}
-
 const std::map<std::string, LocationConfig>& ServerConfig::getLocations() const 
 {
 	return _locations;
-}
-
-void ServerConfig::setupServer() 
-{
-	cleanupServer();
-
-	for (std::vector<uint16_t>::const_iterator it = _ports.begin(); it != _ports.end(); ++it) 
-	{
-		try 
-		{
-			int fd = createSocket(*it);
-			_server_fds.push_back(fd);
-		} 
-		catch (const std::exception& e) 
-		{
-			cleanupServer();
-			throw; // Re-throw the exception
-		}
-	}
-}
-
-void ServerConfig::cleanupServer() 
-{
-	for (std::vector<int>::iterator it = _server_fds.begin(); it != _server_fds.end(); ++it) 
-	{
-		if (*it >= 0) 
-			if (close(*it) == -1)
-				std::cerr << "Warning: Failed to close socket: " << *it << " (errno: " << errno << ")" << std::endl;
-	}
-	_server_fds.clear();
-	_server_addresses.clear();
-}
-
-int ServerConfig::createSocket(uint16_t port) 
-{
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd == -1) 
-		throw std::runtime_error(std::string("Failed to create socket: ") + strerror(errno));
-
-	int opt = 1;
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) 
-	{
-		close(fd);
-		throw std::runtime_error(std::string("Failed to set socket options: "));
-	}
-
-	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) 
-	{
-		int save_errno = errno;
-		close(fd);
-		throw std::runtime_error(std::string("Failed to set non-blocking mode: ") +  strerror(save_errno));
-	}
-
-	struct sockaddr_in address;
-	std::memset(&address, 0, sizeof(address));
-	address.sin_family = AF_INET;
-	address.sin_addr.s_addr = INADDR_ANY;
-	address.sin_port = htons(port);
-
-	if (bind(fd, reinterpret_cast<struct sockaddr*>(&address), sizeof(address)) == -1) 
-	{
-		int save_errno = errno;
-		close(fd);
-		throw std::runtime_error("Failed to bind socket on port " + Utils::toString(port) + ": " + strerror(save_errno));
-	}
-
-	if (listen(fd, SOMAXCONN) == -1) 
-	{
-		int save_errno = errno;
-		close(fd);
-		throw std::runtime_error("Failed to listen on socket on port " + Utils::toString(port) + ": " + strerror(save_errno));
-	}
-	_server_addresses.push_back(address);
-
-	return fd;
 }

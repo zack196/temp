@@ -1,15 +1,3 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Utils.hpp                                          :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mregrag <mregrag@student.42.fr>            +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/04/18 17:22:42 by mregrag           #+#    #+#             */
-/*   Updated: 2025/05/08 19:30:02 by mregrag          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #ifndef UTILS_HPP
 #define UTILS_HPP
 
@@ -19,7 +7,7 @@
 #include <dirent.h>
 #include <sstream>
 #include <vector>
-#include <algorithm>
+#include <stdlib.h>
 
 namespace Utils 
 {
@@ -38,7 +26,8 @@ namespace Utils
 	std::string getMessage(int code);
 	bool isPathWithinRoot(const std::string& root, const std::string& path);
 	bool isDirectory(const std::string& path);
-	bool fileExists(const std::string& path);
+	bool isFileExists(const std::string& path);
+	bool isFileReadble(const std::string& path);
 	std::string trim(const std::string& str);
 	void skipWhitespace(std::string& str);
 	int urlDecode(std::string& str);
@@ -72,10 +61,12 @@ namespace Utils
 	char** mapToEnvp(const std::map<std::string, std::string>& env);
 	void freeEnvp(char** envp);
 	std::string createTempFile(const std::string& prefix, const std::string& dir);
-
-	// cookie:
-	std::map<std::string,std::string> parseCookieHeader(const std::string& h);
-
+	std::vector<std::string> split(const std::string& str, char delimiter);
+	std::string trimWhitespace(const std::string& str);
+	ssize_t parseHexChunk(const std::string& hexstr);
+	std::string getExtension(const std::string& path);
+	std::string createUploadFile(const std::string& prefix, const std::string& dir);
+	bool isFileWritable(const std::string& path);
 }
 
 

@@ -1,47 +1,31 @@
-#!/usr/bin/python3
 import os
-import sys
-import cgi
-import time
-import datetime
-print("content typ: jdkjdkdk\r\n")
-print("<!DOCTYPE html>")
-print("<html>")
-print("<head>")
-print("<title>CGI Test Script</title>")
-print("<style>")
-print("body { font-family: Arial, sans-serif; margin: 20px; }")
-print("h1 { color: #2c3e50; }")
-print("table { border-collapse: collapse; width: 100%; }")
-print("th, td { text-align: left; padding: 8px; border: 1px solid #ddd; }")
-print("tr:nth-child(even) { background-color: #f2f2f2; }")
-print("th { background-color: #4CAF50; color: white; }")
-print("</style>")
-print("</head>")
-print("<body>")
+import urllib.request
+import urllib.parse
 
-print("<h2>Environment Variables</h2>")
-print("<table>")
-print("<tr><th>Variable</th><th>Value</th></tr>")
+print("Content-type: text/html\n")
 
-# Sort environment variables for better readability
-env_vars = sorted(os.environ.items())
-for key, value in env_vars:
-    print("<tr><td>{}</td><td>{}</td></tr>".format(key, value))
-print("</table>")
+# Fixed base URL since we know your server and port
+base_url = "http://localhost:8080/cgi-bin/index.py"
 
-# End HTML
-print("</body>")
-print("</html>")
+# Get current count from query string, default to 3
+query_string = os.environ.get('QUERY_STRING', '')
+params = urllib.parse.parse_qs(query_string)
+count = int(params.get('count', ['600'])[0])
 
+print("<html><body>")
+print(f"<p>Count: {count}</p>")
 
-#!/usr/bin/python3
-# import os
-# import sys
-# import cgi
-# import datetime
-#
-# import requests
-#
-# url = "http://127.0.0.1:8080/cgi-bin"
-# requests.get(url)
+if count > 0:
+    new_count = count - 1
+    next_url = f"{base_url}?count={new_count}"
+    print(f"<p>Calling myself with count={new_count}: {next_url}</p>")
+    try:
+        with urllib.request.urlopen(next_url) as response:
+            content = response.read().decode()
+            print("<p>Called myself successfully.</p>")
+    except Exception as e:
+        print(f"<p>Error calling myself: {e}</p>")
+else:
+    print("<p>Reached zero count, stopping recursion.</p>")
+
+print("</body></html>")

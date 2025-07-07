@@ -1,41 +1,56 @@
-#ifndef CGI_HANDLER_HPP
-#define CGI_HANDLER_HPP
+#ifndef S_CGI_HANDLER_HPP
+#define S_CGI_HANDLER_HPP
 
 #include <string>
 #include <map>
+#include <ctime>
+#include <signal.h>
+#include <sys/types.h> 
 #include "HTTPRequest.hpp"
-#include "HTTPResponse.hpp"
 
-class CGIHandler {
+
+class CGIHandler
+{
 public:
-	CGIHandler(HTTPRequest* request, HTTPResponse* response);
+	CGIHandler();
 	~CGIHandler();
 
-	void    setEnv();
-	void    start();
-	void    cleanup();
-	int     getPipeFd() const;
-	pid_t   getPid() const;
+	void init(HTTPRequest* request);
+	void start();
+
+	bool isRunning(int& status);
+	void killProcess();
+	bool hasTimedOut();
+
+	time_t getStartTime() const;
+	std::string getOutputFile() const;
+	pid_t getPid() const;
+
+	void validatePaths() const;
+	void buildEnv();
+	void buildArgv();
+	void cleanEnv();
+	void cleanArgv();
+	void cleanup();
 
 private:
-	void    buildEnv();
-	void    buildArgv();
-	void    cleanEnv();
-	void    cleanArgv();
-	void    validatePaths() const;
+	pid_t           _pid;
+	int             _ouFd;
+	int             _inFd;
 
-	pid_t   _pid;
-	HTTPRequest*     _request;
-	HTTPResponse*    _response;
 	std::string     _execPath;
 	std::string     _scriptPath;
+	std::string     _outputFile;
+	std::string     _extension;
+
+	char**          _envp;
+	char**          _argv;
+
 	std::map<std::string, std::string> _env;
-	char**  _envp;
-	char**  _argv;
-	int     _pipeFd[2];
-	time_t  _startTime;
-	int     _timeout;
-	bool    _pipeClosed;
+
+	time_t          _startTime;
+
 };
 
-#endif // CGI_HANDLER_HPP
+#endif
+

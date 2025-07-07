@@ -1,33 +1,35 @@
-#pragma once
+#ifndef CONFIGPARSER_HPP
+#define CONFIGPARSER_HPP
+
 #include <string>
 #include <vector>
+#include <fstream>
 #include "ServerConfig.hpp"
-#include "FileHandler.hpp"
+#include "LocationConfig.hpp"
 
-class ConfigParser {
+class ConfigParser
+{
 public:
-    ConfigParser();
-    explicit ConfigParser(const std::string& configFilePath);
-    ConfigParser(const ConfigParser& other);
-    ConfigParser& operator=(const ConfigParser& other);
+	ConfigParser(const std::string& configFilePath);
 
-    void parseFile();
-    std::vector<ServerConfig>& getServers() { return _servers; }
-    const std::vector<ServerConfig>& getServers() const { return _servers; }
+	void parseFile();
+	std::vector<ServerConfig> getServers() const;
 
 private:
-    void removeComments(std::string& content);
-    void trimWhitespace(std::string& content);
-    void collapseSpaces(std::string& content);
-    void cleanContent(std::string& content);
-    void validateFilePath(const std::string& path);
-    void parseServerBlocks(const std::string& content);
-    size_t findBlockStart(const std::string& content, size_t pos);
-    size_t findBlockEnd(const std::string& content, size_t blockStart);
-    void parseServerBlock(const std::string& block);
-    LocationConfig parseLocationBlock(const std::string& locationHeader, const std::string& block);
-    std::vector<std::string> split(const std::string& str, char delimiter);
+	std::string _configFile;
+	std::vector<ServerConfig> _servers;
 
-    FileHandler _configFile;
-    std::vector<ServerConfig> _servers;  // Store ServerConfig objects directly, not pointers
+	void validateFilePath(const std::string& path);
+	void validateBraces(const std::string& path);
+	void validateServerConflicts() const;
+
+	void parseServerBlocks(std::ifstream& fileStream);
+	void parseServerBlock(const std::string& block);
+	void parseDirective(const std::string& line, ServerConfig& server);
+	void parseLocationBlock(const std::string& content, LocationConfig& location);
+
+	std::string extractLocationPath(const std::string& line);
 };
+
+#endif
+

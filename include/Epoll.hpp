@@ -4,14 +4,14 @@
 #include <sys/epoll.h>
 #include <vector>
 
-class EpollManager 
+class Epoll 
 {
 public:
-	EpollManager(size_t maxEvents);
-	~EpollManager();
+	Epoll(size_t maxEvents);
+	~Epoll();
 
-	EpollManager(const EpollManager&);
-	EpollManager& operator=(const EpollManager&);
+	Epoll(const Epoll&);
+	Epoll& operator=(const Epoll&);
 
 	bool add(int fd, uint32_t events);
 	bool modify(int fd, uint32_t events);

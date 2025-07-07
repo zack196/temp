@@ -33,9 +33,6 @@ class Logger
 
 		static Logger& getInstance();
 
-		void setLogLevel(LogLevel level);
-		void enableColors(bool enable);
-
 		void debug(const std::string& message);
 		void info(const std::string& message);
 		void warning(const std::string& message);
@@ -50,9 +47,7 @@ class Logger
 		void log(LogLevel level, const std::string& message);
 		std::string getTimestamp();
 		std::string getLevelString(LogLevel level);
-
 		LogLevel _currentLevel;
-		bool _colorsEnabled;
 };
 
 

@@ -3,21 +3,31 @@
 #include "../include/ServerConfig.hpp"
 #include "../include/LocationConfig.hpp"
 #include "../include/Utils.hpp"
-#include <algorithm>
+#include <bits/types/locale_t.h>
 #include <cctype>
+#include <cmath>
+#include <csetjmp>
+#include <cstddef>
+#include <cstdlib>
 #include <ctime>
 #include <cstring>
+#include <netdb.h>
 #include <string>
 #include <sys/wait.h>
 #include <iostream>
 #include <fstream>
-#include <sstream>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
 
-HTTPRequest::HTTPRequest(ServerConfig* server)
-	: _server(server),
-	_statusCode(0),
+
+HTTPRequest::HTTPRequest(std::vector<ServerConfig>& servers)
+	: _server(servers[0]),
+	 _servers(servers),
+	_statusCode(200),
 	_state(INIT),
-	_parsePosition(0),
 	_contentLength(0),
 	_method(""),
 	_uri("/"),
@@ -25,115 +35,36 @@ HTTPRequest::HTTPRequest(ServerConfig* server)
 	_query(""),
 	_protocol("HTTP/1.1"),
 	_bodyBuffer(""),
-	_headerKey(""),
-	_headerValue(""),
 	_headers(),
 	_contentType(""),
-	_boundary(""),
 	_resource(""),
 	_isChunked(false),
 	_keepAlive(true),
 	_chunkSize(-1),
-	_receivedLength(0),
-	_multipartBoundary(""),
-	_location(NULL),
-	_uploadHeadersParsed(false),
-	_chunkFileInitialized(false),
-	_uploadFilepath(""),
-	_uploadBoundary(""),
+	_length(0),
+	_boundary("--"),
 	_multipartState(PART_HEADER),
 	_chunkState(CHUNK_SIZE),
-	_hasCgi(false),
-	_bodyTempFile("")
+	_bodyFile(""),
+	_totalBodySize(0)
 {
 }
 
-HTTPRequest::HTTPRequest(const HTTPRequest& other)
-	: _server(other._server),
-	_statusCode(other._statusCode),
-	_state(other._state),
-	_parsePosition(other._parsePosition),
-	_contentLength(other._contentLength),
-	_method(other._method),
-	_uri(other._uri),
-	_path(other._path),
-	_query(other._query),
-	_protocol(other._protocol),
-	_bodyBuffer(other._bodyBuffer),
-	_headerKey(other._headerKey),
-	_headerValue(other._headerValue),
-	_headers(other._headers),
-	_contentType(other._contentType),
-	_boundary(other._boundary),
-	_resource(other._resource),
-	_isChunked(other._isChunked),
-	_keepAlive(other._keepAlive),
-	_chunkSize(other._chunkSize),
-	_receivedLength(other._receivedLength),
-	_multipartBoundary(other._multipartBoundary),
-	_location(other._location),
-	_uploadHeadersParsed(other._uploadHeadersParsed),
-	_chunkFileInitialized(other._chunkFileInitialized),
-	_uploadFilepath(other._uploadFilepath),
-	_uploadBoundary(other._uploadBoundary),
-	_multipartState(other._multipartState),
-	_chunkState(other._chunkState),
-	_hasCgi(other._hasCgi),
-	_bodyTempFile(other._bodyTempFile)
-{
-}
-
-HTTPRequest& HTTPRequest::operator=(const HTTPRequest& other) 
-{
-	if (this != &other) 
-	{
-		closeOpenFiles();
-		_server               = other._server;
-		_statusCode           = other._statusCode;
-		_state                = other._state;
-		_parsePosition        = other._parsePosition;
-		_contentLength        = other._contentLength;
-		_method               = other._method;
-		_uri                  = other._uri;
-		_path                 = other._path;
-		_query                = other._query;
-		_protocol             = other._protocol;
-		_bodyBuffer           = other._bodyBuffer;
-		_headerKey            = other._headerKey;
-		_headerValue          = other._headerValue;
-		_headers              = other._headers;
-		_contentType          = other._contentType;
-		_boundary             = other._boundary;
-		_resource             = other._resource;
-		_isChunked            = other._isChunked;
-		_keepAlive            = other._keepAlive;
-		_chunkSize            = other._chunkSize;
-		_receivedLength       = other._receivedLength;
-		_multipartBoundary    = other._multipartBoundary;
-		_location             = other._location;
-		_uploadHeadersParsed  = other._uploadHeadersParsed;
-		_chunkFileInitialized = other._chunkFileInitialized;
-		_uploadFilepath       = other._uploadFilepath;
-		_uploadBoundary       = other._uploadBoundary;
-		_multipartState       = other._multipartState;
-		_chunkState           = other._chunkState;
-		_hasCgi               = other._hasCgi;
-		_bodyTempFile        = other._bodyTempFile;
-	}
-	return *this;
-}
 
 HTTPRequest::~HTTPRequest() 
 {
-	closeOpenFiles();
-}
-
-void HTTPRequest::closeOpenFiles() 
-{
 	if (_uploadFile.is_open())
 		_uploadFile.close();
-	if (_bodyStream.is_open())
-		_bodyStream.close();
+	if (_body.is_open())
+	{
+		std::remove(_bodyFile.c_str());
+		_body.close();
+	}
+}
+
+void HTTPRequest::setClientfd(int fd)
+{
+	_client_fd = fd;
 }
 
 bool HTTPRequest::keepAlive() const 
@@ -148,21 +79,13 @@ const std::map<std::string, std::string>& HTTPRequest::getHeaders() const
 
 bool HTTPRequest::isComplete() const 
 {
-	return (_state == FINISH || _state == ERRORE);
+	return (_state == FINISH || _state == ERROR);
 }
 
 
 bool HTTPRequest::hasCgi()
 {
-	std::string path = _resource;
-
-	size_t dotPos = path.find_last_of('.');
-	if (dotPos == std::string::npos)
-		return false;
-
-	std::string extension = path.substr(dotPos);
-
-	if (_location && _location->getCgiExtension() == extension)
+	if (_location.hasCgi())
 		return true;
 
 	return false;
@@ -213,7 +136,7 @@ int HTTPRequest::getStatusCode() const
 	return _statusCode;
 }
 
-ServerConfig* HTTPRequest::getServer() const 
+const ServerConfig& HTTPRequest::getServer() const 
 {
     return _server;
 }
@@ -248,75 +171,87 @@ std::string HTTPRequest::getQueryParameter(const std::string& key) const
 	return "";
 }
 
-const LocationConfig* HTTPRequest::getLocation() const 
+const LocationConfig& HTTPRequest::getLocation() const 
 {
 	return _location;
 }
 
-void HTTPRequest::parse(std::string& rawdata) 
+void HTTPRequest::parseRequest(std::string& data) 
 {
-	if (_state == FINISH || _state == ERRORE || rawdata.empty())
+	if (data.empty())
 		return;
-	if (_state == INIT)
-		_state = LINE_METHOD;
-	if (_state == LINE_METHOD)
-		parseMethod(rawdata);
-	if (_state == LINE_URI)
-		parseUri(rawdata);
-	if (_state == LINE_VERSION)
-		parseVersion(rawdata);
-	if (_state == HEADER_KEY)
-		parseHeadersKey(rawdata);
-	if (_state == HEADER_VALUE)
-		parseHeadersValue(rawdata);
-	if (_state == BODY_INIT || _state == BODY_MULTIPART || _state == BODY_CGI)
-		parseRequestBody(rawdata);
 
+	if (_state == INIT)
+		_state = METHOD;
+	if (_state == METHOD)
+		parseMethod(data);
+	if (_state == URI)
+		parseUri(data);
+	if (_state == PROTOCOL)
+		parseProtocol(data);
+	if (_state == HEADER)
+		parseHeaders(data);
+	if (_state == BODY_INIT)
+		parseBody();
+	if (_state == CGI)
+		writeBodyToFile(data);
+	if (_state == CHUNKED)
+		parseChunkBody(data);
+	if (_state == MULTIPART)
+		parseMultipartBody(data);
+
+	if (_state == FINISH || _state == ERROR)
+		return;
 }
 
-void HTTPRequest::parseMethod(std::string& rawdata) 
+void HTTPRequest::parseMethod(std::string& data) 
 {
-	size_t space_pos = rawdata.find(' ');
+	size_t space_pos = data.find(' ');
 	if (space_pos == std::string::npos)
 		return;
-	_method = rawdata.substr(0, space_pos);
+	_method = data.substr(0, space_pos);
+
 	if (_method.empty() || !Utils::isValidMethodToken(_method)) 
 	{
-		setState(ERRORE);
+		setState(ERROR);
 		setStatusCode(400);
 		return;
 	}
-	if (!Utils::isSupportedMethod(_method)) 
+
+	if (_method != "GET" && _method != "POST" && _method != "DELETE") 
 	{
-		setState(ERRORE);
-		setStatusCode(400);
+		setState(ERROR);
+		setStatusCode(501);
 		return;
 	}
-	rawdata.erase(0, space_pos + 1);
-	setState(LINE_URI);
+
+	data.erase(0, space_pos + 1);
+	setState(URI);
 }
 
-void HTTPRequest::parseUri(std::string& rawdata) 
+
+
+void HTTPRequest::parseUri(std::string& data) 
 {
-	size_t space_pos = rawdata.find(' ');
+	size_t space_pos = data.find(' ');
 	if (space_pos == std::string::npos)
 		return;
-	_uri = rawdata.substr(0, space_pos);
+	_uri = data.substr(0, space_pos);
 	if (_uri.size() > 8192) 
 	{
-		setState(ERRORE);
+		setState(ERROR);
 		setStatusCode(414);
 		return;
 	}
 	if (_uri.empty() || !Utils::isValidUri(_uri)) 
 	{
-		setState(ERRORE);
+		setState(ERROR);
 		setStatusCode(400);
 		return;
 	}
 	if (Utils::urlDecode(_uri) == -1) 
 	{
-		setState(ERRORE);
+		setState(ERROR);
 		setStatusCode(400);
 		return;
 	}
@@ -325,493 +260,495 @@ void HTTPRequest::parseUri(std::string& rawdata)
 	{
 		_path = _uri.substr(0, query_pos);
 		_query = _uri.substr(query_pos + 1);
-		parseQueryParameters(_query);
 	} 
 	else 
-	{
 		_path = _uri;
-		_query.clear();
-	}
-	rawdata.erase(0, space_pos + 1);
+	data.erase(0, space_pos + 1);
 
-	_location = _server->findLocation(_path);
-	_resource = _location->getResource(_path);
-	setState(LINE_VERSION);
+	setState(PROTOCOL);
 }
 
-void HTTPRequest::parseQueryParameters(const std::string& query)
+void HTTPRequest::parseProtocol(std::string& data) 
 {
-	size_t start = 0;
-	size_t end;
-	while ((end = query.find('&', start)) != std::string::npos) 
-	{
-		std::string param = query.substr(start, end - start);
-		size_t equals = param.find('=');
-		if (equals != std::string::npos) 
-		{
-			std::string key = param.substr(0, equals);
-			std::string value = param.substr(equals + 1);
-			_queryParameters[key] = value;
-			if(key == "method")
-				_method = value;
-		}
-		start = end + 1;
-	}
-
-	std::string param = query.substr(start);
-	size_t equals = param.find('=');
-	if (equals != std::string::npos) 
-	{
-		std::string key = param.substr(0, equals);
-		std::string value = param.substr(equals + 1);
-		_queryParameters[key] = value;
-		if(key == "method")
-			_method = value;
-	}
-}
-
-void HTTPRequest::parseVersion(std::string& rawdata) 
-{
-	size_t pos = rawdata.find("\r\n");
-	if (pos == std::string::npos)
-		pos = rawdata.find("\n");
-	if (pos == std::string::npos)
+	size_t pos = data.find("\r\n");
+	if (pos == std::string::npos) 
 		return;
-	_protocol = rawdata.substr(0, pos);
-	if (!Utils::isValidVersion(_protocol) || _protocol != "HTTP/1.1") 
+
+	size_t line_len = 2;
+	_protocol = Utils::trim(data.substr(0, pos));
+	if (_protocol != "HTTP/1.1") 
 	{
-		setState(ERRORE);
+		setState(ERROR);
 		setStatusCode(400);
 		return;
 	}
-	rawdata.erase(0, pos + ((rawdata[pos]=='\r') ? 2 : 1));
-	setState(HEADER_KEY);
+
+	data.erase(0, pos + line_len);
+	setState(HEADER);
 }
 
-void HTTPRequest::parseHeadersKey(std::string& rawdata) 
+void HTTPRequest::parseHeaders(std::string& data)
 {
-	if (rawdata.empty())
+	if (data.empty())
 		return;
-	bool isCRLF = (rawdata.size() >= 2 && rawdata.substr(0,2) == "\r\n");
-	bool isLF = (!isCRLF && rawdata.size() >= 1 && rawdata[0] == '\n');
-	if (isCRLF || isLF) 
+
+	size_t line_end = data.find("\r\n");
+	if (line_end == std::string::npos)
+		return;
+
+	size_t sep_len = 2;
+
+	std::string line = data.substr(0, line_end);
+
+	if (line.empty()) 
 	{
 		if (_headers.empty() || _headers.find("host") == _headers.end()) 
-		{
-			setState(ERRORE);
-			setStatusCode(400);
-			return;
-		}
-		rawdata.erase(0, (isCRLF ? 2 : 1));
-		setState(BODY_INIT);
+			return (setState(ERROR), setStatusCode(400));
+		else 
+			setState(BODY_INIT);
+		data.erase(0, line_end + sep_len);
 		return;
 	}
-	size_t colon_pos = rawdata.find(':');
-	if (colon_pos == std::string::npos)
-		return;
-	_headerKey = rawdata.substr(0, colon_pos);
-	if (!Utils::isValidHeaderKey(_headerKey)) 
-	{
-		setState(ERRORE);
-		setStatusCode(400);
-		return;
-	}
-	rawdata.erase(0, colon_pos + 1);
-	setState(HEADER_VALUE);
-}
 
-void HTTPRequest::parseHeadersValue(std::string& rawdata) 
-{
-	size_t start = Utils::skipLeadingWhitespace(rawdata);
-	rawdata.erase(0, start);
-	size_t pos = rawdata.find("\r\n");
-	if (pos == std::string::npos)
-		pos = rawdata.find("\n");
-	if (pos == std::string::npos)
-		return;
-	_headerValue = rawdata.substr(0, pos);
-	if (!Utils::isValidHeaderValue(_headerValue)) 
+	size_t colon_pos = line.find(':');
+	if (colon_pos == std::string::npos)
 	{
-		setState(ERRORE);
+		setState(ERROR);
 		setStatusCode(400);
 		return;
 	}
-	for (size_t i = 0; i < _headerKey.size(); ++i)
-		_headerKey[i] = std::tolower(_headerKey[i]);
-	if (_headers.find(_headerKey) != _headers.end()) 
+
+	std::string key = line.substr(0, colon_pos);
+	std::string value = Utils::trim(line.substr(colon_pos + 1));
+
+	for (size_t i = 0; i < key.size(); ++i)
+		key[i] = std::tolower(key[i]);
+
+	if (!Utils::isValidHeaderKey(key) || !Utils::isValidHeaderValue(value)) 
+		return (setState(ERROR), setStatusCode(400));
+
+	if (_headers.find(key) != _headers.end()) 
 	{
-		if (_headerKey == "host" || _headerKey == "content-length" || _headerKey == "transfer-encoding" || _headerKey == "connection" || _headerKey == "expect") 
-		{
-			setState(ERRORE);
-			setStatusCode(400);
-			return;
-		}
-		else if (_headerKey == "cookie" || _headerKey == "accept" || _headerKey == "accept-language") 
-			_headers[_headerKey] += "; " + _headerValue;
-		else
-			_headers[_headerKey] = _headerValue;
+		if (key == "host" || key == "content-length" || key == "transfer-encoding" || key == "connection")
+			return (setState(ERROR), setStatusCode(400));
+		else if (key == "cookie") 
+			_headers[key] += "; " + value;
+		else 
+			_headers[key] = value;
 	} 
 	else 
-		_headers[_headerKey] = _headerValue;
+		_headers[key] = value;
 
-	// cookie:
-	if (_headerKey == "cookie")
-	{
-		_cookies = Utils::parseCookieHeader(_headerValue);
-	}
-
-	_headerKey.erase();
-	_headerValue.erase();
-	rawdata.erase(0, pos + ((rawdata[pos]=='\r') ? 2 : 1));
-	setState(HEADER_KEY);
-	parse(rawdata);
+	data.erase(0, line_end + sep_len);
+	setState(HEADER);
+	parseRequest(data);
 }
-
 
 const std::string& HTTPRequest::getBodyfile() const
 {
-	return _bodyTempFile;
+	return _bodyFile;
 }
 
 bool HTTPRequest::validateCgi()
 {
 	if (!hasCgi())
 		return true;
-	_bodyTempFile = Utils::createTempFile("body_", _server->getClientBodyTmpPath());
-
-	_bodyStream.open(_bodyTempFile.c_str(), std::ios::binary);
-	if (!_bodyStream.is_open())
+	try 
 	{
-		LOG_ERROR("Failed to open CGI body file: " + _bodyTempFile);
+		_bodyFile = Utils::createTempFile("body_", _server.getClientBodyTmpPath());
+		_body.open(_bodyFile.c_str(), std::ios::binary);
+		if (!_body.is_open())
+		{
+			LOG_ERROR("Failed to open CGI body file: " + _bodyFile);
+			setStatusCode(500);
+			setState(ERROR);
+			return false;
+		}
+		_state = CGI;
+	}
+	catch (const std::exception& e) 
+	{
+
+		LOG_INFO(e.what());
 		setStatusCode(500);
-		setState(ERRORE);
+		setState(ERROR);
 		return false;
 	}
-
-	LOG_INFO("Created CGI body temp file: " + _bodyTempFile);
-	_state = BODY_CGI;
 	return true;
 }
 
-void HTTPRequest::writeBodyToFile(std::string& rawdata) 
+void HTTPRequest::writeBodyToFile(std::string& data) 
 {
-	if (!_bodyStream.is_open()) 
+	if (!_body.is_open()) 
 	{
-		LOG_ERROR("CGI body file is not open. Unable to write.");
 		setStatusCode(500);
-		setState(ERRORE);
+		setState(ERROR);
 		return;
 	}
 
-	_bodyStream.write(rawdata.c_str(), rawdata.size());
-	if (!_bodyStream.good()) 
+	_body.write(data.c_str(), data.size());
+	if (!_body.good()) 
 	{
-		LOG_ERROR("Failed to write to CGI body file: " + _bodyTempFile);
 		setStatusCode(500);
-		setState(ERRORE);
-		_bodyStream.close();
+		setState(ERROR);
+		_body.close();
 		return;
 	}
 
-	_receivedLength += rawdata.size();
+	_length += data.size();
 
-	rawdata.clear();
+	data.clear();
 
-	if (_receivedLength >= _contentLength) 
+	if (_length >= _contentLength)
 	{
-		LOG_INFO("Completed writing CGI body to file: " + _bodyTempFile);
-		_bodyStream.close();
-		setStatusCode(201);
+		_body.close();
 		setState(FINISH);
 	}
 }
 
-void HTTPRequest::parseRequestBody(std::string& rawdata) 
+std::string HTTPRequest:: getSocketIp(int fd)
 {
+	struct sockaddr_in addr;
+	socklen_t len = sizeof(addr);
+	if (getsockname(fd, (struct sockaddr*)&addr, &len) == -1)
+		throw std::runtime_error("getsockname failed");
 
+	return inet_ntoa(addr.sin_addr);
+}
+
+const ServerConfig& HTTPRequest::findServerByHost(const std::string& value)
+{
+	std::string host;
+	uint16_t port = 0;
+
+	size_t pos = value.find(':');
+	if (pos != std::string::npos)
+	{
+		host = value.substr(0, pos);
+		port = static_cast<uint16_t>(std::atoi(value.substr(pos + 1).c_str()));
+	}
+	else
+		host = value;
+
+	std::string ip = getSocketIp(_client_fd);
+
+	std::map<std::string, std::vector<uint16_t> >::const_iterator it;
+
+	for (size_t i = 0; i < _servers.size(); ++i)
+	{
+		if (_servers[i].getServerName() == host)
+		{
+			const std::map<std::string, std::vector<uint16_t> >& host_ports = _servers[i].getHostPort();
+			it = host_ports.begin();
+			for (it = host_ports.begin(); it != host_ports.end(); ++it)
+			{
+				if (it->first == ip)
+				{
+					const std::vector<uint16_t>& ports = it->second;
+					for (size_t j = 0; j < ports.size(); ++j)
+						if (port == 0 || ports[j] == port)
+							return _servers[i];
+				}
+			}
+		}
+	}
+
+	for (size_t i = 0; i < _servers.size(); ++i)
+	{
+		const std::map<std::string, std::vector<uint16_t> >& host_ports = _servers[i].getHostPort();
+		it = host_ports.begin();
+		for (it = host_ports.begin(); it != host_ports.end(); ++it)
+		{
+			if (it->first == ip)
+			{
+				const std::vector<uint16_t>& ports = it->second;
+				for (size_t j = 0; j < ports.size(); ++j)
+					if (port == 0 || ports[j] == port)
+						return _servers[i];
+			}
+		}
+	}
+	return _servers[0];
+}
+
+
+void HTTPRequest::parseBody() 
+{
 	if (_state == BODY_INIT) 
 	{
-		if (!validateAllowedMethods() ||
-			!validateHostHeader() ||
+		if (!validateHostHeader() ||
+			!validateAllowedMethods() ||
 			!validateContentLength() ||
-			!validateTransferEncoding() ||
 			!validateMultipartFormData() ||
-			!validateCgi())
+			!validateCgi() ||
+			!validateTransferEncoding())
 			return;
-	}
-
-	/* ----------  NEW: ordinary body -------------------- */
-    if (_state == BODY_INIT && !_isChunked && _multipartBoundary.empty())
-    {
-        // append as much as we still need
-        size_t need = _contentLength - _receivedLength;   // may be 0
-        size_t take = std::min(need, rawdata.size());
-
-        _bodyBuffer.append(rawdata, 0, take);
-        _receivedLength += take;
-        rawdata.erase(0, take);
-
-        if (_receivedLength < _contentLength)
-            return;                       // wait for more TCP segments
-
-        /* body complete */
-        setStatusCode(200);
-        setState(FINISH);
-        return;
-    }
-
-
-	if (_state == BODY_CGI)
-		writeBodyToFile(rawdata);
-
-	else if (_state == BODY_MULTIPART)
-		parseMultipartBody(rawdata);
-
-	else if (_state == BODY_CHUNKED)
-		parseChunkBody(rawdata);
-	else 
-	{
-		setStatusCode(200);
-		setState(FINISH);
 	}
 }
 
 
-void HTTPRequest::parseChunkBody(std::string& rawdata) 
+void HTTPRequest::parseChunkBody(std::string& data) 
 {
-	if (!_chunkFileInitialized) 
+	if (!_body.is_open()) 
 	{
-		_bodyTempFile = Utils::createTempFile("chunke_", _server->getClientBodyTmpPath());
-		_bodyStream.open(_bodyTempFile.c_str(), std::ios::binary);
-		if (!_bodyStream.is_open()) 
+		_bodyFile = Utils::createTempFile("body_", _server.getClientBodyTmpPath());
+		_body.open(_bodyFile.c_str(), std::ios::binary);
+		if (!_body.is_open()) 
 		{
 			setStatusCode(500);
-			setState(ERRORE);
+			setState(ERROR);
 			return;
 		}
-		_chunkFileInitialized = true;
 		_chunkState = CHUNK_SIZE;
+		_totalBodySize = 0;
 	}
-	while (!rawdata.empty()) 
+
+	while (!data.empty()) 
 	{
 		if (_chunkState == CHUNK_SIZE) 
 		{
-			if (!processChunkSize(rawdata))
+			if (!readChunkSize(data))
 				return;
 		}
 		else if (_chunkState == CHUNK_DATA) 
 		{
-			if (!processChunkData(rawdata))
+			if (!readChunkData(data))
 				return;
 		}
-		else if (_chunkState == CHUNK_FINISHED)
-			return;
 	}
 }
 
-bool HTTPRequest::processChunkSize(std::string& rawdata) 
+bool HTTPRequest::readChunkSize(std::string& data) 
 {
-	size_t pos = rawdata.find("\r\n");
+	size_t pos = data.find("\r\n");
 	if (pos == std::string::npos)
 		return false;
-	if (pos == 0 || pos > 8) 
+
+	std::string line = data.substr(0, pos);
+
+	_chunkSize = Utils::parseHexChunk(line);
+	if (_chunkSize == -1) 
 	{
 		setStatusCode(400);
-		setState(ERRORE);
-		_bodyStream.close();
+		setState(ERROR);
+		_body.close();
 		return false;
 	}
-	_chunkSize = 0;
-	for (size_t i = 0; i < pos; ++i) 
-	{
-		char c = rawdata[i];
-		if (c >= '0' && c <= '9')
-			_chunkSize = (_chunkSize * 16) + (c - '0');
-		else if (c >= 'a' && c <= 'f')
-			_chunkSize = (_chunkSize * 16) + (c - 'a' + 10);
-		else if (c >= 'A' && c <= 'F')
-			_chunkSize = (_chunkSize * 16) + (c - 'A' + 10);
-		else 
-		{
-			setStatusCode(400);
-			setState(ERRORE);
-			_bodyStream.close();
-			return false;
-		}
-	}
-	rawdata.erase(0, pos + 2);
+	data.erase(0, pos + 2);
 	if (_chunkSize == 0) 
 	{
-		_bodyStream.close();
-		_chunkState = CHUNK_FINISHED;
-		setStatusCode(201);
-		setState(FINISH);
-		return false;
+		size_t pos = data.find("\r\n");
+		if (pos == std::string::npos)
+			return false;
+
+		if (pos == 0)
+		{
+			data.erase(0, 2);
+			_body.close();
+			setStatusCode(200);
+			setState(FINISH);
+			return false;
+		}
 	}
 	_chunkState = CHUNK_DATA;
 	return true;
 }
 
-bool HTTPRequest::processChunkData(std::string& rawdata) 
+bool HTTPRequest::readChunkData(std::string& data) 
 {
-	if (rawdata.size() < static_cast<size_t>(_chunkSize + 2))
+	if (data.size() < static_cast<size_t>(_chunkSize + 2))
 		return false;
 
-	if (rawdata[_chunkSize] != '\r' || rawdata[_chunkSize + 1] != '\n') 
+	if (data[_chunkSize] != '\r' || data[_chunkSize + 1] != '\n') 
 	{
 		setStatusCode(400);
-		setState(ERRORE);
-		_bodyStream.close();
+		setState(ERROR);
+		_body.close();
 		return false;
 	}
-	_bodyStream.write(rawdata.c_str(), _chunkSize);
-	if (!_bodyStream.good()) 
+
+	_totalBodySize += _chunkSize;
+	if (_totalBodySize > _server.getClientMaxBodySize()) 
 	{
-		setStatusCode(500);
-		setState(ERRORE);
-		_bodyStream.close();
+		setStatusCode(413);
+		setState(ERROR);
+		_body.close();
 		return false;
 	}
-	rawdata.erase(0, _chunkSize + 2);
+	if (getHeader("content-type").find("multipart/form-data") != std::string::npos)
+	{
+		std::string chunk_part = data.substr(0, _chunkSize);
+		parseMultipartBody(chunk_part);
+	}
+	else 
+		_body.write(data.c_str(), _chunkSize);
+
+	data.erase(0, _chunkSize + 2);
 	_chunkState = CHUNK_SIZE;
 	return true;
 }
 
-void HTTPRequest::parseMultipartBody(std::string& rawdata) 
+
+void HTTPRequest::parseMultipartBody(std::string& data) 
 {
-	while (!rawdata.empty()) 
+	while (!data.empty()) 
 	{
+		
 		if (_multipartState == PART_HEADER) 
 		{
-			if (!processPartHeader(rawdata))
+			if (!processPartHeader(data))
 				return;
 		}
 		else if (_multipartState == PART_DATA) 
 		{
-			if (!processPartData(rawdata))
+			if (!processPartData(data))
 				return;
 		}
 		else if (_multipartState == PART_BOUNDARY) 
 		{
-			if (!processPartBoundary(rawdata))
+			if (!processPartBoundary(data))
 				return;
 		} 
-		else if (_multipartState == PART_END) 
-		{
-			setStatusCode(201);
-			return;
-		}
 	}
 }
 
-bool HTTPRequest::processPartHeader(std::string& rawdata) 
+bool HTTPRequest::processPartHeader(std::string& data) 
 {
-	size_t end = rawdata.find("\r\n\r\n");
+	size_t end = data.find("\r\n\r\n");
 	if (end == std::string::npos) 
-	{
-		setStatusCode(400);
-		setState(ERRORE);
 		return false;
-	}
 
-	std::string headers = rawdata.substr(0, end);
-	rawdata.erase(0, end + 4);
+	std::string headers = data.substr(0, end);
+	data.erase(0, end + 4);
 	size_t filename_pos = headers.find("filename=\"");
 	if (filename_pos == std::string::npos) 
-	{
-		setStatusCode(400);
-		setState(ERRORE);
 		return false;
-	}
+
 	filename_pos += 10;
 	size_t quote_end = headers.find("\"", filename_pos);
 	if (quote_end == std::string::npos) 
-	{
-		setStatusCode(400);
-		setState(ERRORE);
 		return false;
-	}
 	std::string filename = headers.substr(filename_pos, quote_end - filename_pos);
-	for (size_t i = 0; i < filename.size(); ++i)
-		if (!std::isalnum(filename[i]) && filename[i] != '.' && filename[i] != '_')
-			filename[i] = '_';
-	_uploadFilepath = _location->getUploadPath() + "/" + filename;
-	_uploadFile.open(_uploadFilepath.c_str(), std::ios::binary);
+
+	std::string filePath = Utils::createUploadFile(filename, _location.getUploadPath());
+	_uploadFile.open(filePath.c_str(), std::ios::binary);
 	if (!_uploadFile.is_open()) 
 	{
 		setStatusCode(500);
-		setState(ERRORE);
+		setState(ERROR);
 		return false;
 	}
 	_multipartState = PART_DATA;
 	return true;
 }
 
-bool HTTPRequest::processPartData(std::string& rawdata) 
+bool HTTPRequest::processPartData(std::string& data) 
 {
-	size_t boundary_pos = rawdata.find(_uploadBoundary);
+	size_t boundary_pos = data.find(_boundary);
 	if (boundary_pos == std::string::npos) 
 	{
-		size_t reserve = _uploadBoundary.size() + 4;
-		if (rawdata.size() <= reserve)
+		if (getHeader("transfer-encoding") == "chunked")
+		{
+			_uploadFile.write(data.c_str(), data.size());
+			data.erase(0, data.size());
+			_state = CHUNKED;
 			return false;
-		size_t write_len = rawdata.size() - reserve;
-		_uploadFile.write(rawdata.c_str(), write_len);
-		_uploadFile.flush();
-		rawdata.erase(0, write_len);
+		}
+
+		if (data.size() <= _boundary.size() + 4)
+			return false;
+		size_t write_len = data.size() - (_boundary.size() + 4);
+		_uploadFile.write(data.c_str(), write_len);
+		data.erase(0, write_len);
 		return false;
 	}
 	size_t data_end = boundary_pos;
-	if (boundary_pos >= 2 && rawdata.substr(boundary_pos - 2, 2) == "\r\n")
+	if (boundary_pos >= 2 && data.substr(boundary_pos - 2, 2) == "\r\n")
 		data_end -= 2;
 	if (data_end > 0) 
-	{
-		_uploadFile.write(rawdata.c_str(), data_end);
-		_uploadFile.flush();
-	}
+		_uploadFile.write(data.c_str(), data_end);
+
 	_uploadFile.close();
-	rawdata.erase(0, boundary_pos);
+	data.erase(0, boundary_pos);
 	_multipartState = PART_BOUNDARY;
 	return true;
 }
 
-bool HTTPRequest::processPartBoundary(std::string& rawdata) 
+bool HTTPRequest::processPartBoundary(std::string& data) 
 {
-	if (rawdata.substr(0, _uploadBoundary.length()) != _uploadBoundary) 
-	{
-		setStatusCode(400);
-		setState(ERRORE);
+	if (data.size() < _boundary.length() + 4) 
 		return false;
-	}
-	rawdata.erase(0, _uploadBoundary.length());
-	if (rawdata.substr(0, 2) == "--") 
+
+	data.erase(0, _boundary.length());
+
+	if (data.substr(0, 2) == "--") 
 	{
-		rawdata.erase(0, 2);
+		data.erase(0, 2);
 		_multipartState = PART_END;
 		setState(FINISH);
 		setStatusCode(201);
-		return true;
+		return false;
 	}
-	else if (rawdata.substr(0, 2) == "\r\n") 
+	else if (data.substr(0, 2) == "\r\n") 
 	{
-		rawdata.erase(0, 2);
-		_uploadFilepath.erase();
+		data.erase(0, 2);
 		_multipartState = PART_HEADER;
 		return true;
 	}
-	setStatusCode(400);
-	setState(ERRORE);
 	return false;
 }
 
 bool HTTPRequest::validateHostHeader() 
 {
-	if (getHeader("host").empty()) 
+	std::string host = getHeader("host");
+
+	if (host.empty()) 
 	{
 		setStatusCode(400);
-		setState(ERRORE);
+		setState(ERROR);
 		return false;
 	}
+
+	_server = findServerByHost(host);
+	_location = _server.findLocation(_path);
+	_resource = _location.getResource(_path);
+	if (_resource.empty())
+	{
+		setState(ERROR);
+		setStatusCode(400);
+	}
+
+	LOG_INFO(_method + " " + _uri + " " + _protocol);
+	std::string hostname;
+	std::string port;
+
+	size_t colonPos = host.find(':');
+	if (colonPos != std::string::npos) 
+	{
+		hostname = host.substr(0, colonPos);
+		port = host.substr(colonPos + 1);
+
+		for (size_t i = 0; i < port.size(); ++i) 
+		{
+			if (!isdigit(port[i])) 
+			{
+				setStatusCode(400);
+				setState(ERROR);
+				return false;
+			}
+		}
+	} 
+	else 
+		hostname = host;
+
+	if (hostname.empty()) 
+	{
+		setStatusCode(400);
+		setState(ERROR);
+		return false;
+	}
+
+	setState(FINISH);
 	return true;
 }
 
@@ -820,20 +757,24 @@ bool HTTPRequest::validateContentLength()
 	std::string cl = getHeader("content-length");
 	if (cl.empty())
 		return true;
+
 	for (size_t i = 0; i < cl.size(); ++i)
+	{
 		if (!std::isdigit(cl[i])) 
 		{
 			setStatusCode(400);
-			setState(ERRORE);
+			setState(ERROR);
 			return false;
 		}
+	}
 	_contentLength = Utils::stringToSizeT(cl);
-	if (_contentLength > _server->getClientMaxBodySize()) 
+	if (_contentLength > _server.getClientMaxBodySize()) 
 	{
 		setStatusCode(413);
-		setState(ERRORE);
+		setState(ERROR);
 		return false;
 	}
+	setState(FINISH);
 	return true;
 }
 
@@ -846,17 +787,17 @@ bool HTTPRequest::validateTransferEncoding()
 		if (te != "chunked") 
 		{
 			setStatusCode(501);
-			setState(ERRORE);
+			setState(ERROR);
 			return false;
 		}
 		if (!cl.empty()) 
 		{
 			setStatusCode(400);
-			setState(ERRORE);
+			setState(ERROR);
 			return false;
 		}
 		_isChunked = true;
-		_state = BODY_CHUNKED;
+		_state = CHUNKED;
 		_chunkState = CHUNK_SIZE;
 	}
 	return true;
@@ -864,36 +805,31 @@ bool HTTPRequest::validateTransferEncoding()
 
 bool HTTPRequest::validateMultipartFormData() 
 {
-	if (_location && _location->hasCgi())
+	if (_location.hasCgi())
 		return true;
+
 	std::string ct = getHeader("content-type");
 	if (ct.find("multipart/form-data") == std::string::npos)
 		return true;
 	size_t pos = ct.find("boundary=");
+
 	if (pos == std::string::npos) 
 	{
-		setStatusCode(469);
-		setState(ERRORE);
+		setStatusCode(400);
+		setState(ERROR);
 		return false;
 	}
-	std::string boundary = ct.substr(pos + 9);
-	if (boundary.empty()) 
-	{
-		setStatusCode(469);
-		setState(ERRORE);
-		return false;
-	}
-	_uploadBoundary = "--" + boundary;
+	_boundary += ct.substr(pos + 9);
 	_multipartState = PART_HEADER;
-	_state = BODY_MULTIPART;
+	_state = MULTIPART;
 	return true;
 }
 
 bool HTTPRequest::validateAllowedMethods() 
 {
-	if (_location && _location->isMethodAllowed(_method))
+	if (_location.isMethodAllowed(_method))
 		return true;
-	setState(ERRORE);
+	setState(ERROR);
 	setStatusCode(405);
 	return false;
 }
@@ -902,13 +838,13 @@ void HTTPRequest::clear()
 {
 	if (_uploadFile.is_open())
 		_uploadFile.close();
-	if (_bodyStream.is_open())
-		_bodyStream.close();
+	if (_body.is_open())
+	{
+		_body.close();
+		std::remove(_bodyFile.c_str());
+	}
 
-	if (std::remove(_bodyTempFile.c_str()) == 0) 
-		LOG_INFO("Removed temporary body file: " + _bodyTempFile);
-
-	_statusCode = 0;
+	_statusCode = 200;
 	_state = INIT;
 	_parsePosition = 0;
 	_contentLength = 0;
@@ -918,34 +854,15 @@ void HTTPRequest::clear()
 	_query = "";
 	_protocol = "HTTP/1.1";
 	_bodyBuffer = "";
-	_headerKey = "";
-	_headerValue = "";
 	_headers.clear();
 	_contentType = "";
 	_boundary = "";
 	_isChunked = false;
 	_keepAlive = true;
 	_chunkSize = -1;
-	_multipartBoundary = "";
-	_location = NULL;
-	_uploadHeadersParsed = false;
-	_chunkFileInitialized = false;
-	_uploadFilepath = "";
-	_uploadBoundary = "";
+	_boundary = "--";
 	_multipartState = PART_HEADER;
 	_chunkState = CHUNK_SIZE;
-	_hasCgi = false;
+	_client_fd = -1;
 
-}
-
-const std::map<std::string, std::string>&	HTTPRequest::getCookies() const
-{
-	return _cookies;
-}
-
-const std::string&	HTTPRequest::getCookie(const std::string &name) const
-{
-	static const std::string	empty;
-	std::map<std::string, std::string>::const_iterator it = _cookies.find(name);
-	return ( (it == _cookies.end()) ? empty : it->second );
 }

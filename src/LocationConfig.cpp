@@ -3,35 +3,12 @@
 #include <sstream>
 #include <iostream>
 
-LocationConfig::LocationConfig() : _root("./www/html"), _path("/"), _index("index.html"), _autoindex(false), _cgiExtension(""), _cgiPath(""), _uploadPath("")
+LocationConfig::LocationConfig() : _root("./www/html"), _path("/"), _index("index.html"), _autoindex(false), _uploadPath("./www/upload"), _redirectCode(0), _redirectPath("")
 {
-	_redirect = std::make_pair(0, "");
 }
 
 LocationConfig::~LocationConfig()
 {
-}
-
-LocationConfig::LocationConfig(const LocationConfig& other) 
-{
-	*this = other;
-}
-
-LocationConfig& LocationConfig::operator=(const LocationConfig& other)
-{
-	if (this != &other)
-	{
-		_root = other._root;
-		_path = other._path;
-		_index = other._index;
-		_autoindex = other._autoindex;
-		_allowedMethods = other._allowedMethods;
-		_cgiExtension = other._cgiExtension;
-		_cgiPath = other._cgiPath;
-		_redirect = other._redirect;
-		_uploadPath = other._uploadPath;
-	}
-	return *this;
 }
 
 void LocationConfig::setRoot(const std::string& root)
@@ -64,58 +41,45 @@ void LocationConfig::setUploadPath(const std::string& path)
 	_uploadPath = path;
 }
 
-std::vector<std::string> LocationConfig::split(const std::string& str, char delimiter) 
-{
-	std::vector<std::string> tokens;
-	std::string token;
-	std::istringstream iss(str);
-
-	while (std::getline(iss, token, delimiter)) 
-	{
-		token = Utils::trim(token);
-		if (!token.empty()) 
-			tokens.push_back(token);
-	}
-
-	return tokens;
-}
 
 std::string LocationConfig::getResource(const std::string& requestPath) const 
 {
-	std::string root = _root;
-	std::string path = requestPath;
 
-	if (!root.empty() && root[root.length() - 1] != '/') 
-		root += '/';
+	std::string relativePath = requestPath;
 
-	if (!path.empty() && path[0] == '/') 
-		path = path.substr(1);
+	if (relativePath.find(_path) == 0)
+		relativePath.erase(0, _path.length());
 
-	std::string full_path = root + path;
+	if (!relativePath.empty() && relativePath[0] == '/')
+		relativePath.erase(0, 1);
 
-	if (Utils::isDirectory(full_path)) 
+	std::string rootPath = _root;
+	if (!rootPath.empty() && rootPath[rootPath.length() - 1] != '/')
+		rootPath += '/';
+
+	std::string fullPath = rootPath + relativePath;
+
+	if (Utils::isDirectory(fullPath)) 
 	{
-		std::string index_path = full_path;
-		if (!index_path.empty() && index_path[index_path.length() - 1] != '/') 
-			index_path += '/';
+		if (fullPath[fullPath.length() - 1] != '/')
+			fullPath += '/';
 
-		index_path += _index;
-		if (Utils::fileExists(index_path)) 
-			return index_path;
+		std::string indexPath = fullPath + _index;
+		if (Utils::isFileExists(indexPath))
+			return indexPath;
 
-		return full_path;
+		return fullPath;
 	}
-
-	if (Utils::fileExists(full_path)) 
-		return full_path;
-
+	if (Utils::isFileExists(fullPath)) 
+		return fullPath;
 	return "";
 }
 
+
+
 void LocationConfig::setAllowedMethods(const std::string& methods)
 {
-	std::vector<std::string> methodsList = split(methods, ' ');
-	_allowedMethods.clear();
+	std::vector<std::string> methodsList = Utils::split(methods, ' ');
 
 	for (std::vector<std::string>::iterator it = methodsList.begin(); it != methodsList.end(); ++it)
 	{
@@ -128,33 +92,37 @@ void LocationConfig::setAllowedMethods(const std::string& methods)
 	}
 }
 
-void LocationConfig::setCgiExtension(const std::string& extension)
-{ 
-	_cgiExtension = extension;
+void LocationConfig::setCgiPath(const std::string& cgiLine)
+{
+	std::size_t spacePos = cgiLine.find_first_of(" \t");
+
+	if (spacePos == std::string::npos)
+		throw std::runtime_error("Invalid cgi_path directive: " + cgiLine);
+
+	std::string ext = Utils::trim(cgiLine.substr(0, spacePos));
+	std::string path = Utils::trim(cgiLine.substr(spacePos + 1));
+
+	if (ext.empty() || path.empty())
+		throw std::runtime_error("Invalid cgi_path directive: " + cgiLine);
+	_cgiPath[ext] = path;
 }
 
-void LocationConfig::setCgiPath(const std::string& path)
-{
-	_cgiPath = path;
-}
 
 void LocationConfig::setRedirect(const std::string& redirectValue) 
 {
 	std::istringstream iss(redirectValue);
 	int code;
-	std::string url;
+	std::string path;
 
-	if (!(iss >> code >> url)) 
-		throw std::runtime_error("Invalid redirect format: " + redirectValue + 
-			   " (should be 'code url')");
+	if (!(iss >> code >> path)) 
+		throw std::runtime_error("Invalid redirect format: " + redirectValue + " (should be 'code path')");
 
 	if (code < 300 || code > 308) 
 		throw std::runtime_error("Invalid redirect code: " + Utils::toString(code) + " (must be between 300-308)");
 
-	if (!url.empty() && url[url.length()-1] == ';') 
-		url.erase(url.length()-1);
 
-	_redirect = std::make_pair(code, url);
+	_redirectCode = code;
+	_redirectPath = path;
 }
 
 const std::string& LocationConfig::getRoot() const 
@@ -187,29 +155,20 @@ const std::vector<std::string>& LocationConfig::getAllowedMethods() const
 	return _allowedMethods;
 }
 
-const std::pair<int, std::string>& LocationConfig::getRedirect() const 
-{
-	return _redirect;
+int LocationConfig::getRedirectCode() const {
+    return _redirectCode;
 }
 
-int LocationConfig::getRedirectCode() const 
-{
-	return _redirect.first;
+const std::string& LocationConfig::getRedirectPath() const {
+    return _redirectPath;
 }
 
-const std::string& LocationConfig::getRedirectPath() const 
+std::string LocationConfig::getCgiPath(const std::string& ext) const 
 {
-	return _redirect.second;
-}
-
-const std::string& LocationConfig::getCgiExtension() const
-{
-	return _cgiExtension; 
-}
-
-const std::string& LocationConfig::getCgiPath() const
-{
-	return _cgiPath;
+	std::map<std::string, std::string>::const_iterator it = _cgiPath.find(ext);
+	if (it != _cgiPath.end())
+		return it->second;
+	return "";
 }
 
 const std::string& LocationConfig::getUploadPath() const
@@ -226,21 +185,15 @@ bool LocationConfig::isMethodAllowed(const std::string& method) const
 		it != _allowedMethods.end(); ++it) 
 		if (*it == method)
 			return true;
-
 	return false;
 }
 
 bool LocationConfig::hasRedirection() const 
 {
-	return (_redirect.first >= 300 && _redirect.first <= 308 && !_redirect.second.empty());
+	return (!_redirectPath.empty() && _redirectCode != 0);
 }
 
 bool LocationConfig::hasCgi() const 
 {
-	return (!_cgiExtension.empty() && !_cgiPath.empty());
-}
-
-bool LocationConfig::allowsUploads() const
-{
-	return !_uploadPath.empty();
+	return (!_cgiPath.empty());
 }
